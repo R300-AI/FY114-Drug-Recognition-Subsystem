@@ -1,0 +1,24 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Generated outputs and deployed models
+src/gallery/
+src/best.pt
+
+# Runtime data
+records/
+
+# Log files
+*.log
+
+# Model weights
+*.pt
+
+# Temporary captures
+src/captures/

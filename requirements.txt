@@ -1,0 +1,27 @@
+# Raspberry Pi 5 (Debian 12) 執行環境
+# 安裝方式：pip install -r requirements.txt
+
+# 影像處理
+numpy>=1.24.0,<2.0.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+
+# 深度學習（CPU 版本）
+# 安裝 PyTorch CPU：
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+torchvision>=0.15.0
+
+# YOLO 偵測（版本固定，確保與 FY115 生成的模型相容）
+ultralytics==8.4.3
+
+# 設定檔
+pyyaml>=6.0.0
+
+# Pi Camera（須以 --system-site-packages 建立 venv）
+# pip install picamera2
+
+# LED Ring（Raspberry Pi 5）
+# pip install adafruit-blinka
+# pip install Adafruit-Blinka-Raspberry-Pi5-Neopixel
+# pip install adafruit-circuitpython-neopixel
