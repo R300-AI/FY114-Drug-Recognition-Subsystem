@@ -1,0 +1,1253 @@
+﻿<!doctype html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>drugAIui</title>
+
+    <style>
+        :root {
+            --bg: #d9d9d9;
+            --border: #555;
+            --tab: #bfbfbf;
+            --tabActive: #e6e6e6;
+            --okBg: #d8f1d8;
+            --okText: #1f6b1f;
+            --badBg: #f6caca;
+            --badText: #8b0000;
+            --numBg: #58B2DC;
+            --shadow: 0 10px 24px rgba(0,0,0,.25);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Microsoft JhengHei","Noto Sans TC",system-ui,sans-serif;
+            background: #fff;
+            padding: 16px;
+            display: flex;
+            justify-content: center;
+            color: #111;
+            zoom: 1.05;
+        }
+
+        .app {
+            width: min(1180px, 98vw);
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+
+        .topbar {
+            display: grid;
+            grid-template-columns: auto auto auto 1fr auto auto auto;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(#e5e5e5,#d5d5d5);
+        }
+
+        /* 系統標題 */
+        .uiTitle {
+            font-size: 22px;
+            font-weight: 1000;
+            letter-spacing: .5px;
+            color: #3f4f66;
+            white-space: nowrap;
+            padding-right: 12px;
+            border-right: 2px solid rgba(0,0,0,.18);
+        }
+
+        /* 鏡頭 / AI */
+        .tab {
+            background: #d0d0d0;
+            border: 1px solid #888;
+            font-weight: 1000;
+            cursor: pointer;
+            border-radius: 10px;
+            font-size: 20px;
+            user-select: none;
+            height: 40px;
+            width: 82px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+            .tab.active {
+                background: #fff;
+                border: 2px solid #888;
+            }
+
+        /* 藥盤序號 */
+        .trayLabel {
+            font-weight: 1000;
+            font-size: 20px;
+        }
+
+        #trayId {
+            background: #fff;
+            border: 2px solid #000;
+            font-size: 20px;
+            font-weight: 900;
+            padding: 6px 14px;
+            border-radius: 10px;
+            min-width: 120px;
+            text-align: center;
+        }
+
+
+        /* 時間 */
+        .timeBlock {
+            font-size: 20px;
+            font-weight: 1000;
+        }
+
+
+        /* 完成按鈕 */
+        .done {
+            background: #ffd95b;
+            border: 2px solid #d9ac00;
+            font-weight: 1000;
+            cursor: pointer;
+            border-radius: 12px;
+            font-size: 20px;
+            height: 40px;
+            width: 96px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0;
+            padding: 0;
+            align-items: stretch;
+        }
+
+        .leftWrap {
+            padding: 12px 0 12px 12px;
+        }
+
+        .left {
+            border: 1px solid var(--border);
+            background: #000;
+            border-radius: 0;
+            overflow: hidden;
+            position: relative;
+            width: 100%;
+            min-height: 460px;
+            display: flex;
+            align-items: stretch;
+            justify-content: center;
+        }
+
+        .main-img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .img-badge {
+            position: absolute;
+            left: 10px;
+            top: 10px;
+            background: rgba(255,255,255,.85);
+            border: 1px solid rgba(0,0,0,.25);
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-weight: 900;
+            font-size: 14px;
+            color: #111;
+            z-index: 3;
+        }
+
+        .img-highlight {
+            position: absolute;
+            border: 3px solid #8fd18f;
+            box-shadow: 0 0 0 3px rgba(255, 243, 92, .2);
+            background: rgba(255,255,255,.18);
+            border-radius: 30px;
+            padding: 14px;
+            pointer-events: none;
+            display: grid;
+            z-index: 2;
+        }
+
+        .right {
+            padding: 8px 12px 12px 10px;
+            display: grid;
+            grid-template-rows: auto auto;
+            gap: 8px;
+        }
+
+        .rows {
+            display: grid;
+            gap: 10px;
+        }
+
+        .row {
+            display: grid;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .row--summary {
+            display: grid;
+            grid-template-columns: 160px 70px 40px 100px 100px;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .cell {
+            border: 1px solid rgba(0,0,0,.2);
+            background: #e6e6e6;
+            border-radius: 10px;
+            padding: 8px;
+            font-weight: 900;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            min-height: 44px;
+            user-select: none;
+        }
+
+        .label {
+            border: none;
+            background: transparent;
+            padding-left: 20px;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            font-weight: 1000;
+            font-size: 20px;
+        }
+
+        .unit {
+            border: none;
+            background: transparent;
+            padding: 0;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 1000;
+            font-size: 20px;
+        }
+
+        .num {
+            background: #58B2DC;
+            border: none;
+            font-size: 28px;
+            font-weight: 1000;
+            padding: 6px 12px;
+            border-radius: 10px;
+        }
+
+        .btn {
+            cursor: pointer;
+            border: 1px solid rgba(0,0,0,.25);
+            transition: all .12s ease;
+            font-size: 20px;
+            font-weight: 1000;
+            min-height: 44px;
+            width: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+        }
+
+            .btn.ok {
+                background: #dcefdc;
+                color: #1f6b1f;
+            }
+
+            .btn.bad {
+                background: #f0d0d0;
+                color: #a14d4d;
+            }
+
+            .btn.ok.active {
+                border-color: #2fa02f;
+                box-shadow: 0 0 0 5px rgba(47,160,47,.35), inset 0 0 0 2px rgba(31,143,31,.95);
+            }
+
+            .btn.bad.active {
+                border-color: #c63030;
+                box-shadow: 0 0 0 5px rgba(209,0,0,.25), inset 0 0 0 2px rgba(176,0,0,.9);
+            }
+
+        .highlight {
+            border: 3px solid rgba(255,255,255,.8);
+            border-radius: 22px;
+            padding: 10px;
+            display: grid;
+            gap: 10px;
+            background: rgba(255,255,255,.18);
+            box-shadow: inset 0 0 0 4px rgba(255,255,255,.45);
+        }
+
+        .hl-title {
+            border: none;
+            background: #81C7D4;
+            padding: 12px 14px;
+            border-radius: 18px;
+            font-size: 20px;
+            text-align: left;
+            line-height: 1.15;
+            min-height: 88px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            word-break: break-word;
+            font-weight: 1000;
+        }
+
+        .rightGridRow {
+            display: grid;
+            grid-template-columns: 70px 70px 70px 40px 100px 100px;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .nameRow {
+            display: grid;
+            grid-template-columns: 70px 70px 70px 40px 100px 100px;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .nameLabel {
+            grid-column: 1 / span 4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 50px;
+            font-size: 20px;
+            font-weight: 1000;
+        }
+
+        .drug-subrows {
+            display: grid;
+            gap: 12px;
+        }
+
+        .dose-row {
+            display: grid;
+            grid-template-columns: 70px 70px 70px 40px 100px 100px;
+            gap: 8px;
+            align-items: center;
+            padding: 0 2px;
+            border-radius: 16px;
+            transition: background-color .15s ease;
+        }
+
+            .dose-row.active-focus {
+                background: rgba(255,255,255,.28);
+            }
+
+        .drugIcon {
+            width: 56px;
+            height: 56px;
+            object-fit: contain;
+            display: block;
+            justify-self: center;
+        }
+
+        .qtyText {
+            font-size: 20px;
+            font-weight: 1000;
+            text-align: left;
+        }
+
+        .qtyUnit {
+            font-size: 20px;
+            font-weight: 1000;
+            text-align: center;
+        }
+
+        .total-view-row {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            align-items: center;
+            margin-top: 2px;
+        }
+
+        .total-view-label {
+            border: 2px solid rgba(0,0,0,.75);
+            border-radius: 12px;
+            min-height: 50px;
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 1000;
+            font-size: 22px;
+            background: rgba(255,255,255,.65);
+        }
+
+        .footer {
+            border-top: 4px solid rgba(255,255,255,.7);
+            padding-top: 10px;
+            display: grid;
+            grid-template-columns: 100px 1fr 100px;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .navbtn {
+            border: 1px solid #888;
+            background: #c9c9c9;
+            font-weight: 1000;
+            cursor: pointer;
+            border-radius: 10px;
+            min-height: 44px;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+            .navbtn:disabled {
+                opacity: .5;
+                cursor: not-allowed;
+            }
+
+        .page {
+            font-weight: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            font-size: 20px;
+        }
+
+        .missing {
+            outline: 3px solid rgba(209,0,0,.35);
+            outline-offset: 4px;
+            border-radius: 14px;
+            background: rgba(255,0,0,.04);
+        }
+
+        .backdrop {
+            position: fixed;
+            inset: 0;
+            display: none;
+            background: rgba(0,0,0,.45);
+            backdrop-filter: blur(6px);
+            z-index: 999;
+            padding: 18px;
+        }
+
+        .modal {
+            max-width: 720px;
+            margin: 6vh auto 0;
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            overflow: hidden;
+            border: 1px solid rgba(0,0,0,.2);
+            padding: 14px;
+            max-height: 82vh;
+            font-size: 20px;
+        }
+
+        /* header */
+        .modalHeader {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: #eef3ff;
+            border-bottom: 1px solid #d5dff5;
+        }
+
+        .modalTitle {
+            font-size: 20px;
+            font-weight: 900;
+        }
+
+        .modalActions {
+            display: flex;
+            gap: 10px;
+        }
+
+        /* content */
+        .modalContent {
+            padding: 16px;
+            max-height: 55vh;
+            overflow-y: auto;
+        }
+
+        .primary {
+            background: #2f6fff;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 20px;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+            .primary:hover {
+                background: #255ae6;
+            }
+
+        .feedbackList {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .feedbackItem {
+            border: 1px solid rgba(0,0,0,.15);
+            border-radius: 10px;
+            padding: 4px 0;
+            font-weight: 900;
+            background: #f7f7f7;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 20px;
+        }
+
+        .feedbackDrugHeader {
+            font-size: 20px;
+            font-weight: 900;
+            margin-top: 12px;
+        }
+
+        .feedbackChild {
+            padding-left: 36px;
+            border-left: 3px solid #e0e0e0;
+            margin-left: 10px;
+        }
+
+        .feedbackText {
+            flex: 1;
+        }
+
+        .feedbackStatus.ok {
+            color: #1f6b1f;
+        }
+
+        .feedbackStatus.bad {
+            color: #8b0000;
+        }
+
+        .drugTag {
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-weight: 900;
+            margin-right: 6px;
+            display: inline-block;
+        }
+        /* message */
+        #modalMessage {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+        /* feedback list */
+        #feedbackList {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        /* 簡單 toast 提示樣式（儲存完成） */
+        .toast {
+            position: fixed;
+            left: 50%;
+            top: 25%;
+            transform: translateX(-50%) translateY(-12px);
+            /* 半透明漸層背景：從 #3a6186 到 #89253e (alpha 0.85) */
+            background: linear-gradient(90deg, rgba(58,97,134,0.85) 0%, rgba(137,37,62,0.85) 100%);
+            color: #fff;
+            padding: 18px 28px;
+            border-radius: 14px;
+            font-weight: 1000;
+            font-size: 40px;
+            z-index: 3000;
+            opacity: 0;
+            transition: opacity 220ms ease, transform 220ms ease;
+            pointer-events: none;
+            min-width: 340px;
+            max-width: calc(100% - 48px);
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        }
+
+            .toast.visible {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+
+        @media (max-width: 1200px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+
+            .leftWrap {
+                padding: 16px;
+            }
+
+            .right {
+                padding: 0 16px 16px 16px;
+            }
+
+            .left {
+                min-height: 520px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <div class="topbar">
+            <div class="uiTitle">AI藥品輔助辨識</div>
+            <div class="tab" data-tab="cam">鏡頭</div>
+            <div class="tab" data-tab="ai">AI</div>
+            <div></div>
+            <div class="trayLabel" style="margin-left:auto;">藥盤序號</div>
+            <div id="trayId">11503110001</div>
+            <div style="display:flex;align-items:center;gap:10px;justify-self:end;">
+                <div class="timeBlock">時間：<span id="nowTime"></span></div>
+                <button class="done" id="doneBtn" type="button">完成</button>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="leftWrap">
+                <div class="left">
+                    <span class="img-badge" id="imgBadge">（尚未選擇影像）</span>
+                    <img id="mainImg" class="main-img" style="display:none" alt="preview">
+                    <div id="imgHighlight" class="img-highlight"></div>
+                </div>
+            </div>
+
+            <div class="right">
+                <div class="rows">
+                    <div class="row row--summary check-row" data-checkrow="r2">
+                        <div class="label">【藥盤】總品項</div>
+                        <div class="cell num" id="r2num">5</div>
+                        <div class="unit">種</div>
+                        <button class="cell btn ok" data-group="r2" data-val="ok" type="button">正確</button>
+                        <button class="cell btn bad" data-group="r2" data-val="bad" type="button">錯誤</button>
+                    </div>
+
+                    <div class="row row--summary check-row" data-checkrow="r3">
+                        <div class="label">【藥盤】總數量</div>
+                        <div class="cell num" id="r3num">9</div>
+                        <div class="unit">顆</div>
+                        <button class="cell btn ok" data-group="r3" data-val="ok" type="button">正確</button>
+                        <button class="cell btn bad" data-group="r3" data-val="bad" type="button">錯誤</button>
+                    </div>
+                </div>
+
+                <div class="highlight" id="drugPanel">
+                    <div class="hl-title" id="drugName">(藥品商品名)</div>
+
+                    <div class="nameRow check-row" data-checkrow="name">
+                        <div></div>
+                        <div class="nameLabel">【藥品】名稱核對</div>
+                        <button class="cell btn ok" data-group="name" data-val="ok" type="button">正確</button>
+                        <button class="cell btn bad" data-group="name" data-val="bad" type="button">錯誤</button>
+                    </div>
+
+                    <div class="drug-subrows" id="doseRows"></div>
+
+                    <div class="total-view-row">
+                        <div class="total-view-label" id="drugTotalLabel">共計 0 顆</div>
+                    </div>
+
+                    <div class="footer">
+                        <button class="navbtn" id="prevBtn" type="button">上一項</button>
+                        <div class="page" id="pageInfo">第 1 項/共 5 項</div>
+                        <button class="navbtn" id="nextBtn" type="button">下一項</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="backdrop" id="checkModal">
+
+            <div class="modal">
+
+                <div class="modalHeader">
+
+                    <div class="modalTitle" id="checkTitle">AI藥品劑量輔助辨識</div>
+
+                    <div class="modalActions">
+                        <button class="primary" id="resetAll" type="button">重新回饋</button>
+                        <button class="primary" id="backToCheck" type="button">儲存</button>
+                    </div>
+
+                </div>
+
+                <div class="modalContent">
+
+                    <div id="modalMessage">
+                        完成所有藥品查核與回饋
+                    </div>
+
+                    <div id="feedbackList"></div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+        <script>
+            const drugPages = [
+                {
+                    code: "A",
+                    title: "BOTERASU TABLETS FOR DIARRHEA AND INTESTINAL DISEASES",
+
+                    items: [
+                        { key: "A1", count: 1, color: "#ED7D31", img: "image/A1_image.png" },
+                        { key: "A2", count: 1, color: "#FFC000", img: "image/A2_image.png" }
+                    ]
+                },
+                {
+                    code: "B",
+                    title: "D-CURE CALCIUM 1000 mg / 1000 I.U. Chewable Tablets",
+                    items: [
+                        { key: "B1", count: 1, color: "#385723", img: "image/B1_image.png" },
+                        { key: "B2", count: 1, color: "#1F4E79", img: "image/B2_image.png" }
+                    ]
+                },
+                {
+                    code: "C",
+                    title: "ACYLETE TABLETS 200 MG (ACYCLOVIR)",
+                    items: [
+                        { key: "C1", count: 1, color: "#7030A0", img: "image/C1_image.png" },
+                        { key: "C2", count: 1, color: "#FF3399", img: "image/C2_image.png" },
+                        { key: "C3", count: 1, color: "#70AD47", img: "image/C3_image.png" }
+                    ]
+                },
+                {
+                    code: "D",
+                    title: "FASTIN VAGINAL TABLETS 200MG (CLOTRIMAZOLE)",
+                    items: [
+                        { key: "D1", count: 1, color: "#5B9BD5", img: "image/D1_image.png" }
+                    ]
+                },
+                {
+                    code: "E",
+                    title: "VOLTAREN RETARD 75MG SLOW RELEASE FILM-COATED TABLETS",
+                    items: [
+                        { key: "E1", count: 1, color: "#9966FF", img: "image/E1_image.png" }
+                    ]
+                }
+            ];
+
+            // 左圖各藥位置
+            const imageHotspots = {
+                A1: { left: "8%", top: "7%", width: "19%", height: "19%", radius: "50%" },
+                A2: { left: "29%", top: "25%", width: "19%", height: "19%", radius: "50%" },
+                B1: { left: "6%", top: "40%", width: "18%", height: "20%", radius: "20px" },
+                B2: { left: "26%", top: "62%", width: "20%", height: "20%", radius: "20px" },
+                C1: { left: "64%", top: "7%", width: "18%", height: "18%", radius: "20px" },
+                C2: { left: "60%", top: "31%", width: "20%", height: "20%", radius: "20px" },
+                C3: { left: "5%", top: "71%", width: "20%", height: "20%", radius: "20px" },
+                D1: { left: "67%", top: "59%", width: "19%", height: "20%", radius: "16px" },
+                E1: { left: "78%", top: "37%", width: "19%", height: "20%", radius: "16px" }
+            };
+
+            let currentDrugIndex = 0;
+            const totalKinds = drugPages.length;
+            const totalPills = drugPages.reduce((sum, drug) => {
+                return sum + drug.items.reduce((s, item) => s + item.count, 0);
+            }, 0);
+
+            const globalAnswers = { r2: "ok", r3: "ok" };
+            const nameAnswers = Array.from({ length: drugPages.length }, () => ({ name: "ok" }));
+            const doseAnswers = drugPages.map(drug => {
+                const obj = {};
+                drug.items.forEach(item => obj[item.key] = "ok");
+                return obj;
+            });
+
+            const mainImg = document.getElementById("mainImg");
+            const imgBadge = document.getElementById("imgBadge");
+            const pageInfo = document.getElementById("pageInfo");
+            const prevBtn = document.getElementById("prevBtn");
+            const nextBtn = document.getElementById("nextBtn");
+            const drugPanel = document.getElementById("drugPanel");
+            const drugName = document.getElementById("drugName");
+            const doseRows = document.getElementById("doseRows");
+            const drugTotalLabel = document.getElementById("drugTotalLabel");
+            const imgHighlight = document.getElementById("imgHighlight");
+
+            document.getElementById("r2num").textContent = totalKinds;
+            document.getElementById("r3num").textContent = totalPills;
+
+            const imageMap = {
+                cam: { src: "image/raw_image.jpg", label: "鏡頭" },
+                ai: { src: "image/AI_image.jpg", label: "AI" }
+            };
+
+            function setActiveTab(tabEl) {
+                document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+                tabEl.classList.add("active");
+            }
+
+            function showImage(mode) {
+                const m = imageMap[mode];
+                if (!m) return;
+                mainImg.src = m.src;
+                mainImg.style.display = "block";
+                imgBadge.textContent = m.label;
+
+                if (mode !== "ai") {
+                    imgHighlight.style.display = "none";
+                }
+            }
+
+            function switchToAIView() {
+                const aiTab = document.querySelector('.tab[data-tab="ai"]');
+                if (!aiTab) return;
+                setActiveTab(aiTab);
+                showImage("ai");
+            }
+
+            function setGroupActive(group, value) {
+                document.querySelectorAll(`.btn[data-group="${group}"]`).forEach(b => b.classList.remove("active"));
+                const target = document.querySelector(`.btn[data-group="${group}"][data-val="${value}"]`);
+                if (target) target.classList.add("active");
+            }
+
+            function applyGlobalToUI() {
+                ["r2", "r3"].forEach(group => setGroupActive(group, globalAnswers[group]));
+            }
+
+            function applyNameToUI() {
+                setGroupActive("name", nameAnswers[currentDrugIndex].name);
+            }
+
+            function showImageHighlight(key) {
+
+                const isAIActive =
+                    document.querySelector('.tab[data-tab="ai"]')?.classList.contains("active");
+
+                // 只有 AI 模式才顯示高亮
+                if (!isAIActive) {
+                    imgHighlight.style.display = "none";
+                    return;
+                }
+
+                const spot = imageHotspots[key];
+                if (!spot) {
+                    imgHighlight.style.display = "none";
+                    return;
+                }
+
+                imgHighlight.style.display = "block";
+                imgHighlight.style.left = spot.left;
+                imgHighlight.style.top = spot.top;
+                imgHighlight.style.width = spot.width;
+                imgHighlight.style.height = spot.height;
+                imgHighlight.style.borderRadius = spot.radius || "20px";
+                imgHighlight.style.border = "6px solid #ff3333";
+            }
+
+            function hideImageHighlight() {
+                imgHighlight.style.display = "none";
+            }
+
+            function setDoseRowFocus(row, key) {
+                doseRows.querySelectorAll(".dose-row").forEach(r => r.classList.remove("active-focus"));
+                if (row) row.classList.add("active-focus");
+                if (key) showImageHighlight(key);
+            }
+
+            function clearDoseRowFocus() {
+                doseRows.querySelectorAll(".dose-row").forEach(r => r.classList.remove("active-focus"));
+                hideImageHighlight();
+            }
+
+            function bindSummaryAndNameButtons() {
+                document.querySelectorAll('.btn[data-group="r2"], .btn[data-group="r3"], .btn[data-group="name"]').forEach(btn => {
+                    btn.onclick = () => {
+                        const group = btn.dataset.group;
+                        const val = btn.dataset.val;
+
+                        setGroupActive(group, val);
+
+                        if (group === "name") {
+                            nameAnswers[currentDrugIndex].name = val;
+                        } else {
+                            globalAnswers[group] = val;
+                        }
+
+                        const row = document.querySelector(`.check-row[data-checkrow="${group}"]`);
+                        if (row) row.classList.remove("missing");
+
+                        const isAIActive = document.querySelector('.tab[data-tab="ai"]')?.classList.contains("active");
+                        if (!isAIActive) switchToAIView();
+                    };
+                });
+            }
+
+            function renderDoseRows() {
+                const p = drugPages[currentDrugIndex];
+                doseRows.innerHTML = "";
+
+                p.items.forEach(item => {
+                    const row = document.createElement("div");
+                    row.className = "dose-row check-row";
+                    row.dataset.checkrow = item.key;
+                    row.dataset.key = item.key;
+
+                    const icon = document.createElement("img");
+                    icon.className = "drugIcon";
+                    icon.src = item.img;
+                    icon.alt = item.key;
+
+                    const qtyText = document.createElement("div");
+                    qtyText.className = "qtyText";
+                    qtyText.textContent = "數量";
+
+                    const num = document.createElement("div");
+                    num.className = "cell num";
+                    num.textContent = item.count;
+
+                    const unit = document.createElement("div");
+                    unit.className = "qtyUnit";
+                    unit.textContent = "顆";
+
+                    const okBtn = document.createElement("button");
+                    okBtn.className = "cell btn ok";
+                    okBtn.dataset.group = item.key;
+                    okBtn.dataset.val = "ok";
+                    okBtn.type = "button";
+                    okBtn.textContent = "正確";
+
+                    const badBtn = document.createElement("button");
+                    badBtn.className = "cell btn bad";
+                    badBtn.dataset.group = item.key;
+                    badBtn.dataset.val = "bad";
+                    badBtn.type = "button";
+                    badBtn.textContent = "錯誤";
+
+                    row.appendChild(icon);     // 第1欄
+                    row.appendChild(qtyText);  // 第2欄
+                    row.appendChild(num);      // 第3欄
+                    row.appendChild(unit);     // 第4欄
+                    row.appendChild(okBtn);    // 第5欄
+                    row.appendChild(badBtn);   // 第6欄
+
+                    // 滑鼠移到該列 → 左圖對應藥品被圈起來
+                    row.addEventListener("mouseenter", () => setDoseRowFocus(row, item.key));
+                    // 滑鼠離開該列 → 取消左圖圈選
+                    row.addEventListener("mouseleave", () => clearDoseRowFocus());
+                    // 點該列空白處 → 左圖對應藥品被圈起來
+                    row.addEventListener("click", (e) => {
+                        if (e.target.classList.contains("btn")) return;
+                        setDoseRowFocus(row, item.key);
+                    });
+
+                    doseRows.appendChild(row);
+
+                    setGroupActive(item.key, doseAnswers[currentDrugIndex][item.key]);
+
+                    //點該列正確按鈕 → 左圖對應藥品被圈起來
+                    okBtn.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        setGroupActive(item.key, "ok");
+                        doseAnswers[currentDrugIndex][item.key] = "ok";
+                        row.classList.remove("missing");
+                        setDoseRowFocus(row, item.key);
+                        const isAIActive = document.querySelector('.tab[data-tab="ai"]')?.classList.contains("active");
+                        if (!isAIActive) switchToAIView();
+                    });
+
+                    //點該列錯誤按鈕 → 左圖對應藥品被圈起來
+                    badBtn.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        setGroupActive(item.key, "bad");
+                        doseAnswers[currentDrugIndex][item.key] = "bad";
+                        row.classList.remove("missing");
+                        setDoseRowFocus(row, item.key);
+                        const isAIActive = document.querySelector('.tab[data-tab="ai"]')?.classList.contains("active");
+                        if (!isAIActive) switchToAIView();
+                    });
+                });
+            }
+
+            function updateNavDisabled() {
+                prevBtn.disabled = (currentDrugIndex === 0);
+                nextBtn.disabled = (currentDrugIndex === drugPages.length - 1);
+            }
+
+            function renderDrugPage() {
+                const p = drugPages[currentDrugIndex];
+
+                drugName.textContent = p.title;
+
+                const drugTotal = p.items.reduce((sum, item) => sum + item.count, 0);
+                drugTotalLabel.textContent = `共計 ${drugTotal} 顆`;
+
+                pageInfo.textContent = `第 ${currentDrugIndex + 1} 項/共 ${drugPages.length} 項`;
+
+                updateNavDisabled();
+                applyGlobalToUI();
+                applyNameToUI();
+                renderDoseRows();
+                hideImageHighlight();
+            }
+
+            prevBtn.addEventListener("click", () => {
+                if (currentDrugIndex <= 0) return;
+                currentDrugIndex--;
+                renderDrugPage();
+                switchToAIView();
+            });
+
+            nextBtn.addEventListener("click", () => {
+                if (currentDrugIndex >= drugPages.length - 1) return;
+                currentDrugIndex++;
+                renderDrugPage();
+                switchToAIView();
+            });
+
+            document.querySelectorAll(".tab").forEach(tab => {
+                tab.addEventListener("click", () => {
+                    setActiveTab(tab);
+                    showImage(tab.dataset.tab);
+                });
+            });
+
+            const checkModal = document.getElementById("checkModal");
+            const resetBtn = document.getElementById("resetAll");
+            const backToCheckBtn = document.getElementById("backToCheck");
+            const modalMessage = document.getElementById("modalMessage");
+            const feedbackList = document.getElementById("feedbackList");
+
+            function openMissingModal() {
+                document.getElementById("checkTitle").textContent = "提示";
+                modalMessage.textContent = "請完成所有藥品查核並確實反饋";
+                feedbackList.style.display = "none";
+                feedbackList.innerHTML = "";
+                resetBtn.style.display = "none";
+                backToCheckBtn.textContent = "回去檢查";
+                checkModal.style.display = "block";
+                checkModal.setAttribute("aria-hidden", "false");
+            }
+
+            function closeCheckModal() {
+                checkModal.style.display = "none";
+                checkModal.setAttribute("aria-hidden", "true");
+            }
+
+            function findFirstMissing() {
+                const globalMissing = ["r2", "r3"].filter(g => !globalAnswers[g]);
+                if (globalMissing.length > 0) {
+                    return { drugIndex: currentDrugIndex, missingGroups: globalMissing };
+                }
+
+                for (let i = 0; i < drugPages.length; i++) {
+                    if (!nameAnswers[i].name) {
+                        return { drugIndex: i, missingGroups: ["name"] };
+                    }
+                    for (const item of drugPages[i].items) {
+                        if (!doseAnswers[i][item.key]) {
+                            return { drugIndex: i, missingGroups: [item.key] };
+                        }
+                    }
+                }
+                return null;
+            }
+
+            function markMissingGroups(groups) {
+                groups.forEach(g => {
+                    const row = document.querySelector(`.check-row[data-checkrow="${g}"]`);
+                    if (row) row.classList.add("missing");
+                });
+                drugPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+
+            backToCheckBtn.addEventListener("click", () => {
+                const isMissingMode = backToCheckBtn.textContent === "回去檢查";
+
+               
+                // 顯示短暫的儲存完成提示
+                showSavedToast("儲存完成");
+                closeCheckModal();
+                if (isMissingMode) {
+                    const missing = findFirstMissing();
+                    if (missing) {
+                        currentDrugIndex = missing.drugIndex;
+                        renderDrugPage();
+                        markMissingGroups(missing.missingGroups);
+                    }
+                }
+            });
+
+            function createDrugHeader(title) {
+
+                const item = document.createElement("div");
+                item.className = "feedbackDrugHeader";
+                item.textContent = title;
+
+                return item;
+            }
+
+            function createFeedbackItem(text, status, color = null, isChild = false) {
+                const item = document.createElement("div");
+                item.className = isChild ? "feedbackItem feedbackChild" : "feedbackItem";
+
+                const left = document.createElement("div");
+                left.className = "feedbackText";
+
+                // 只有 A1、B2 這種分顆項目才做彩色 tag
+                const isDoseItem = /^[A-Z]\d\b/.test(text);
+
+                if (isDoseItem && color) {
+                    const parts = text.split(" ");
+
+                    const tag = document.createElement("span");
+                    tag.className = "drugTag";
+                    tag.textContent = parts[0];
+                    tag.style.background = color;
+                    tag.style.color = "#fff";
+
+                    const rest = document.createElement("span");
+                    rest.textContent = " " + parts.slice(1).join(" ");
+
+                    left.appendChild(tag);
+                    left.appendChild(rest);
+                } else {
+                    left.textContent = text;
+                }
+
+                const right = document.createElement("div");
+                right.className = `feedbackStatus ${status}`;
+                right.textContent = status === "ok" ? "正確" : "錯誤";
+
+                item.appendChild(left);
+                item.appendChild(right);
+
+                return item;
+            }
+
+            function buildFeedbackList() {
+                feedbackList.innerHTML = "";
+
+                feedbackList.appendChild(createFeedbackItem(`總品項 ${totalKinds} 種`, globalAnswers.r2));
+                feedbackList.appendChild(createFeedbackItem(`總數量 ${totalPills} 顆`, globalAnswers.r3));
+
+                drugPages.forEach((drug, index) => {
+                    // 藥品名稱
+                    feedbackList.appendChild(createDrugHeader(drug.title));
+
+                    // 品項核對
+                    feedbackList.appendChild(
+                        createFeedbackItem(`品項核對`, nameAnswers[index].name, null, true)
+                    );
+
+                    // 每顆藥
+                    drug.items.forEach(item => {
+                        feedbackList.appendChild(
+                            createFeedbackItem(
+                                `${item.key} 數量 ${item.count} 顆`,
+                                doseAnswers[index][item.key],
+                                item.color,
+                                true
+                            )
+                        );
+                    });
+                });
+            }
+
+            function showSuccessModal() {
+                document.getElementById("checkTitle").textContent = "AI藥品劑量輔助辨識";
+                modalMessage.textContent = "完成所有藥品查核與回饋，結果如下：";
+                buildFeedbackList();
+                feedbackList.style.display = "grid";
+                resetBtn.style.display = "inline-block";
+                backToCheckBtn.textContent = "儲存";
+                checkModal.style.display = "block";
+                checkModal.setAttribute("aria-hidden", "false");
+            }
+
+            // 顯示短暫的儲存完成提示
+            function showSavedToast(message = "儲存完成", duration = 1500) {
+                const toast = document.createElement("div");
+                toast.className = "toast";
+                toast.textContent = message;
+                document.body.appendChild(toast);
+                // force reflow then show
+                void toast.offsetWidth;
+                toast.classList.add("visible");
+                setTimeout(() => {
+                    toast.classList.remove("visible");
+                    setTimeout(() => {
+                        document.body.removeChild(toast);
+                    }, 240);
+                }, duration);
+            }
+
+            document.getElementById("doneBtn").addEventListener("click", () => {
+                switchToAIView();
+                const missing = findFirstMissing();
+                if (missing) {
+                    openMissingModal();
+                    return;
+                }
+                // 顯示結果 modal
+                showSuccessModal();
+
+            });
+
+            document.getElementById("resetAll").addEventListener("click", () => {
+                // 這裡可擴充成重置 state 的行為，目前先關閉 modal（僅示範）
+                closeCheckModal();
+            });
+
+            // 時間更新的 helper
+            function updateClock() {
+                const now = new Date();
+                const hh = String(now.getHours()).padStart(2, '0');
+                const mm = String(now.getMinutes()).padStart(2, '0');
+                const ss = String(now.getSeconds()).padStart(2, '0');
+                document.getElementById("nowTime").textContent =
+                    `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()} ${hh}:${mm}:${ss}`;
+            }
+
+            // 初始化
+            function init() {
+                bindSummaryAndNameButtons();
+
+                const aiTab = document.querySelector('.tab[data-tab="ai"]');
+                if (aiTab) setActiveTab(aiTab);
+                showImage("ai");
+                renderDrugPage();
+
+                updateClock();
+                setInterval(updateClock, 1000);
+            }
+
+            // 啟動
+            init();
+        </script>
+    </div>
+</body>
+</html>
