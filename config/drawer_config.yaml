@@ -1,0 +1,19 @@
+camera:
+  vid: 1267
+  pid: 3198
+  frame_rate: HALF
+  led_current: ULTRA_HIGH
+  exposure_setting: DEFAULT
+roi:
+  enabled: false
+  x1: 40
+  y1: 40
+  x2: 120
+  y2: 120
+thresholds:
+  open: 0.352
+  closed: 0.642
+analysis:
+  use_depth_transform: true
+  filter_window: 13
+  min_state_duration: 9
