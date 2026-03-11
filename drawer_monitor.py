@@ -353,7 +353,7 @@ class DrawerMonitorApp:
         # === 第二列：分析參數 + 配置管理 ===
         
         # 分析參數（增強濾波控制）
-        analysis_frame = ttk. LabelFrame(container, text="分析參數（增強濾波）", padding=15)
+        analysis_frame = ttk.LabelFrame(container, text="分析參數（增強濾波）", padding=15)
         analysis_frame.grid(row=0, column=1, sticky=(tk.N, tk.W, tk.E), padx=5, pady=5)
         
         self.use_transform_var = tk.BooleanVar(
@@ -723,10 +723,7 @@ class DrawerMonitorApp:
                         state_lock_frames=self.config['analysis']['state_lock_frames']
                     )
                 
-                msg = "分析參數已更新（已套用增強濾波）onfig['analysis']['min_state_duration']
-                    )
-                
-                msg = "分析參數已更新"
+                msg = "分析參數已更新(已套用增強濾波)"
             
             # 自動儲存到 YAML
             self.save_config()
