@@ -68,6 +68,7 @@ pip install picamera2
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install ultralytics==8.4.3
 pip install opencv-python pillow pyyaml "numpy>=1.24.0,<2.0.0"
+pip install pyusb matplotlib  # MN96100C 2.5D 傳感器與 Drawer Monitor 所需
 ```
 
 ---
@@ -105,7 +106,14 @@ pip install adafruit-circuitpython-neopixel
 `--detector`、`--encoder`、`--matcher` 不需要模型檔，可在部署前提前驗證。
 
 ```bash
-python test.py --picam --light --detector --encoder --matcher
+# 測試所有元件（含 2.5D 傳感器）
+python test.py --picam --light --drawer --detector --encoder --matcher
+
+# 僅測試硬體
+python test.py --picam --light --drawer
+
+# 僅測試模組（不需要硬體）
+python test.py --detector --encoder --matcher
 ```
 
 ---
@@ -113,12 +121,25 @@ python test.py --picam --light --detector --encoder --matcher
 ## 啟動
 
 ```bash
+# 主程式（藥物辨識系統）
 python run.py                # 視窗模式（開發測試）
 python run.py --fullscreen   # 全螢幕模式（觸控螢幕部署）
 
 # 指定自訂 Gallery 和模型
 python run.py --gallery path/to/gallery --model path/to/best.pt
+
+# Drawer Monitor 工具（MN96100C 2.5D 傳感器校準）
+python drawer_monitor.py     # 抽屜閉合監測調校工具
 ```
+
+> **Drawer Monitor v2.1**: 用於 MN96100C 2.5D 傳感器的校準與測試工具
+> - ✨ **多級濾波系統**：中值濾波 + EMA + 移動平均，有效抑制近距離噪聲
+> - 📊 實時深度圖像與雙通道時間序列分析
+> - 🎚️ 動態閾值調整（即時儲存至 YAML）
+> - ⚙️ 可調濾波參數：窗口大小、EMA 係數、狀態鎖定幀數
+> 
+> 詳細說明：[DRAWER_MONITOR_README.md](docs/DRAWER_MONITOR_README.md)  
+> 濾波調校：[FILTER_TUNING_GUIDE.md](docs/FILTER_TUNING_GUIDE.md) 👈 **解決近距離噪聲問題**
 
 ---
 
@@ -151,16 +172,23 @@ scp path/to/FY115/src/best.pt   pi@<rpi_ip>:~/FY114-Drug-Recognition-Subsystem/s
 
 ```
 FY114-Drug-Recognition-Subsystem/
-├── run.py               ← 主程式（Tkinter GUI）
-├── test.py              ← 元件測試工具
-├── startup.sh           ← 開機自動啟動腳本
-├── requirements.txt     ← Python 套件清單
+├── run.py                     ← 主程式（Tkinter GUI）
+├── drawer_monitor.py          ← 2.5D 傳感器調校工具
+├── test.py                    ← 元件測試工具
+├── startup.sh                 ← 開機自動啟動腳本
+├── requirements.txt           ← Python 套件清單
+├── DRAWER_MONITOR_README.md   ← 2.5D 傳感器調校工具說明
+├── config/
+│   └── drawer_config.yaml     ← Drawer Monitor 配置檔
+├── eminent/
+│   └── sensors/vision2p5d/    ← MN96100C 2.5D 傳感器驅動
 ├── utils/
-│   ├── detector.py      ← BaseDetector 介面（面積過濾）
-│   ├── encoder.py       ← BaseEncoder 介面（L2 正規化）
-│   ├── matcher.py       ← BaseMatcher 介面（空庫防護）
-│   ├── gallery.py       ← 特徵庫管理（index.json + features.npy）
-│   ├── types.py         ← 資料型別（Detection, MatchResult）
+│   ├── detector.py            ← BaseDetector 介面（面積過濾）
+│   ├── encoder.py             ← BaseEncoder 介面（L2 正規化）
+│   ├── matcher.py             ← BaseMatcher 介面（空庫防護）
+│   ├── depth_analysis.py      ← 2.5D 深度分析工具
+│   ├── gallery.py             ← 特徵庫管理（index.json + features.npy）
+│   ├── types.py               ← 資料型別（Detection, MatchResult）
 │   └── modules/
 │       ├── encoder/resnet34.py   ← ResNet34 編碼器（預設）
 │       └── matcher/top1.py       ← Top-1 比對器（預設）
@@ -209,3 +237,5 @@ def create_components(...):
 | `/dev/pio0: No such file` | 韌體過舊，PIO 裝置尚未啟用 | `sudo apt upgrade && sudo rpi-eeprom-update -a` 後重開機 |
 | `picamera2` 找不到 | venv 缺少 `--system-site-packages` | 重建 venv（步驟 2） |
 | GPIO 操作需要 root | 未加入 gpio 群組或未重新登入 | 重做步驟 4 |
+| `usb.core.USBError` (MN96100C) | USB 裝置權限不足 | `sudo chmod 666 /dev/bus/usb/*/*` 或設定 udev 規則 |
+| MN96100C 無法初始化 | VID/PID 錯誤或裝置未連接 | 確認 `lsusb` 顯示 `04f3:0c7e`，檢查 USB 連接 |

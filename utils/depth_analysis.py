@@ -6,6 +6,7 @@ Advanced Depth Calculation Utilities for MN96100C 2.5D Sensor
 import numpy as np
 import csv
 from datetime import datetime
+from collections import deque
 
 
 class DepthAnalyzer:
@@ -189,33 +190,49 @@ class DataLogger:
 class DrawerStateDetector:
     """
     抽屜狀態偵測器
-    使用狀態機和濾波來提高判斷穩定性
+    使用多級濾波和狀態機來提高判斷穩定性，有效抑制噪聲
     """
     
     def __init__(self, threshold_open, threshold_closed, 
-                 filter_window=5, min_state_duration=3):
+                 filter_window=10, min_state_duration=8,
+                 ema_alpha=0.3, use_median_filter=True,
+                 state_lock_frames=15):
         """
         初始化狀態偵測器
         
         Args:
-            threshold_open: 開啟狀態閾值
-            threshold_closed: 閉合狀態閾值
-            filter_window: 移動平均濾波窗口大小
-            min_state_duration: 狀態變更前需要持續的最小幀數
+            threshold_open: 開啟狀態閾值（depth_metric > 此值為開啟）
+            threshold_closed: 閉合狀態閾值（depth_metric < 此值為閉合）
+            filter_window: 移動平均/中值濾波窗口大小（建議 8-15）
+            min_state_duration: 狀態變更前需要持續的最小幀數（建議 6-10）
+            ema_alpha: 指數移動平均的平滑係數（0.1-0.5，越小越平滑）
+            use_median_filter: 是否使用中值濾波去除尖峰噪聲
+            state_lock_frames: 狀態變更後的鎖定幀數（防止快速回跳）
         """
         self.threshold_open = threshold_open
         self.threshold_closed = threshold_closed
         self.filter_window = filter_window
         self.min_state_duration = min_state_duration
+        self.ema_alpha = ema_alpha
+        self.use_median_filter = use_median_filter
+        self.state_lock_frames = state_lock_frames
         
-        self.value_history = []
+        # 數據歷史（使用 deque 提高效率）
+        self.raw_history = deque(maxlen=filter_window)
+        self.filtered_history = deque(maxlen=filter_window)
+        
+        # 狀態追蹤
         self.current_state = "未知"
         self.state_counter = 0
         self.pending_state = None
+        self.state_lock_counter = 0  # 狀態鎖定計數器
+        
+        # EMA 狀態
+        self.ema_value = None
         
     def update(self, depth_value):
         """
-        更新狀態
+        更新狀態（多級濾波 + 增強狀態穩定）
         
         Args:
             depth_value: 當前深度指標值
@@ -223,17 +240,36 @@ class DrawerStateDetector:
         Returns:
             str: 當前抽屜狀態
         """
-        # 添加到歷史並維持窗口大小
-        self.value_history.append(depth_value)
-        if len(self.value_history) > self.filter_window:
-            self.value_history.pop(0)
+        # 第一級：原始數據記錄
+        self.raw_history.append(depth_value)
         
-        # 計算濾波後的值（移動平均）
-        filtered_value = np.mean(self.value_history)
+        # 第二級：中值濾波（去除尖峰噪聲）
+        if self.use_median_filter and len(self.raw_history) >= 3:
+            # 使用最近 3-5 個值做中值濾波
+            recent_values = list(self.raw_history)[-min(5, len(self.raw_history)):]
+            median_filtered = np.median(recent_values)
+        else:
+            median_filtered = depth_value
+        
+        # 第三級：指數移動平均（EMA，平滑長期趨勢）
+        if self.ema_value is None:
+            self.ema_value = median_filtered
+        else:
+            self.ema_value = (self.ema_alpha * median_filtered + 
+                             (1 - self.ema_alpha) * self.ema_value)
+        
+        # 第四級：移動平均（最終平滑）
+        self.filtered_history.append(self.ema_value)
+        filtered_value = np.mean(list(self.filtered_history))
+        
+        # 狀態鎖定機制（剛變更狀態後鎖定一段時間）
+        if self.state_lock_counter > 0:
+            self.state_lock_counter -= 1
+            return self.current_state  # 鎖定期間不改變狀態
         
         # 根據閾值判斷新狀態
-        # 物理原理：抽屡開啟（遠）→ 強度低 → depth_metric 高
-        #           抽屡閉合（近）→ 強度高 → depth_metric 低
+        # 物理原理：抽屉開啟（遠）→ 強度低 → depth_metric 高
+        #           抽屉閉合（近）→ 強度高 → depth_metric 低
         if filtered_value > self.threshold_open:
             new_state = "完全開啟"  # 高值，距離遠
         elif filtered_value > self.threshold_closed:
@@ -241,32 +277,50 @@ class DrawerStateDetector:
         else:
             new_state = "完全閉合"  # 低值，距離近
         
-        # 狀態變更邏輯（需要持續一定幀數才確認變更）
+        # 增強的狀態變更邏輯（需要持續一定幀數才確認變更）
         if new_state != self.current_state:
             if self.pending_state == new_state:
                 self.state_counter += 1
                 if self.state_counter >= self.min_state_duration:
                     # 確認狀態變更
+                    old_state = self.current_state
                     self.current_state = new_state
                     self.state_counter = 0
                     self.pending_state = None
+                    # 啟動狀態鎖定（防止快速回跳）
+                    self.state_lock_counter = self.state_lock_frames
+                    print(f"[狀態變更] {old_state} → {new_state} (濾波值: {filtered_value:.4f})")
             else:
                 # 新的待處理狀態
                 self.pending_state = new_state
                 self.state_counter = 1
         else:
-            # 狀態維持不變
+            # 狀態維持不變，重置待處理狀態
             self.pending_state = None
             self.state_counter = 0
         
         return self.current_state
     
+    def get_filtered_value(self):
+        """獲取當前濾波後的值（用於調試）"""
+        if len(self.filtered_history) > 0:
+            return np.mean(list(self.filtered_history))
+        return None
+    
+    def update_thresholds(self, threshold_open, threshold_closed):
+        """動態更新閾值"""
+        self.threshold_open = threshold_open
+        self.threshold_closed = threshold_closed
+    
     def reset(self):
         """重置狀態偵測器"""
-        self.value_history = []
+        self.raw_history.clear()
+        self.filtered_history.clear()
         self.current_state = "未知"
         self.state_counter = 0
         self.pending_state = None
+        self.state_lock_counter = 0
+        self.ema_value = None
 
 
 # 使用範例

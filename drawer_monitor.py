@@ -82,8 +82,11 @@ class DrawerMonitorApp:
             },
             'analysis': {
                 'use_depth_transform': True,
-                'filter_window': 5,
-                'min_state_duration': 3
+                'filter_window': 15,          # 濾波窗口（增強至15，約2秒歷史）
+                'min_state_duration': 10,     # 狀態確認幀數（增強至10，約1.2秒）
+                'ema_alpha': 0.2,             # EMA平滑係數（降低至0.2，更平滑）
+                'use_median_filter': True,    # 啟用中值濾波（去除尖峰噪聲）
+                'state_lock_frames': 20       # 狀態鎖定幀數（增強至20，約2.5秒）
             }
         }
         
@@ -349,37 +352,66 @@ class DrawerMonitorApp:
         
         # === 第二列：分析參數 + 配置管理 ===
         
-        # 分析參數
-        analysis_frame = ttk.LabelFrame(container, text="分析參數", padding=15)
+        # 分析參數（增強濾波控制）
+        analysis_frame = ttk. LabelFrame(container, text="分析參數（增強濾波）", padding=15)
         analysis_frame.grid(row=0, column=1, sticky=(tk.N, tk.W, tk.E), padx=5, pady=5)
         
         self.use_transform_var = tk.BooleanVar(
             value=self.config['analysis']['use_depth_transform'])
         ttk.Checkbutton(analysis_frame, text="使用物理模型深度轉換（推薦）",
                         variable=self.use_transform_var
-                        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=5)
+                        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=3)
         
-        ttk.Label(analysis_frame, text="濾波窗口大小:", font=('Arial', 9)
-                  ).grid(row=1, column=0, sticky=tk.W, pady=5)
+        # 基礎濾波參數
+        ttk.Label(analysis_frame, text="濾波窗口大小 (8-15):", font=('Arial', 9)
+                  ).grid(row=1, column=0, sticky=tk.W, pady=3)
         self.filter_window_var = tk.IntVar(value=self.config['analysis']['filter_window'])
-        ttk.Spinbox(analysis_frame, from_=1, to=20, textvariable=self.filter_window_var,
-                    width=15).grid(row=1, column=1, pady=5, padx=5)
+        ttk.Spinbox(analysis_frame, from_=5, to=20, textvariable=self.filter_window_var,
+                    width=15).grid(row=1, column=1, pady=3, padx=5)
         
-        ttk.Label(analysis_frame, text="狀態持續幀數:", font=('Arial', 9)
-                  ).grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Label(analysis_frame, text="狀態持續幀數 (6-10):", font=('Arial', 9)
+                  ).grid(row=2, column=0, sticky=tk.W, pady=3)
         self.min_state_duration_var = tk.IntVar(
             value=self.config['analysis']['min_state_duration'])
-        ttk.Spinbox(analysis_frame, from_=1, to=10,
+        ttk.Spinbox(analysis_frame, from_=3, to=15,
                     textvariable=self.min_state_duration_var,
-                    width=15).grid(row=2, column=1, pady=5, padx=5)
+                    width=15).grid(row=2, column=1, pady=3, padx=5)
+        
+        # 高級濾波參數
+        ttk.Separator(analysis_frame, orient='horizontal').grid(
+            row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
+        
+        ttk.Label(analysis_frame, text="EMA 平滑係數 (0.1-0.5):", font=('Arial', 9)
+                  ).grid(row=4, column=0, sticky=tk.W, pady=3)
+        self.ema_alpha_var = tk.DoubleVar(value=self.config['analysis']['ema_alpha'])
+        ema_frame = ttk.Frame(analysis_frame)
+        ema_frame.grid(row=4, column=1, pady=3, padx=5, sticky=tk.W)
+        ttk.Spinbox(ema_frame, from_=0.1, to=0.5, increment=0.05,
+                    textvariable=self.ema_alpha_var, width=8).pack(side=tk.LEFT)
+        ttk.Label(ema_frame, text="越小越平滑", font=('Arial', 7),
+                  foreground='gray').pack(side=tk.LEFT, padx=3)
+        
+        ttk.Label(analysis_frame, text="狀態鎖定幀數 (10-20):", font=('Arial', 9)
+                  ).grid(row=5, column=0, sticky=tk.W, pady=3)
+        self.state_lock_frames_var = tk.IntVar(
+            value=self.config['analysis']['state_lock_frames'])
+        ttk.Spinbox(analysis_frame, from_=5, to=30,
+                    textvariable=self.state_lock_frames_var,
+                    width=15).grid(row=5, column=1, pady=3, padx=5)
+        
+        self.use_median_filter_var = tk.BooleanVar(
+            value=self.config['analysis']['use_median_filter'])
+        ttk.Checkbutton(analysis_frame, text="啟用中值濾波（去除尖峰噪聲）",
+                        variable=self.use_median_filter_var
+                        ).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=3)
         
         ttk.Label(analysis_frame,
-                  text="說明：濾波窗口越大越穩定但響應慢\n      狀態持續幀數可防止誤判",
-                  font=('Arial', 8), foreground='gray', justify=tk.LEFT
-                  ).grid(row=3, column=0, columnspan=2, pady=5)
+                  text="💡 建議：近距離高噪聲環境使用\n   窗口10、持續8、EMA 0.3、鎖定15",
+                  font=('Arial', 8), foreground='#0066cc', justify=tk.LEFT
+                  ).grid(row=7, column=0, columnspan=2, pady=8)
         
         ttk.Button(analysis_frame, text="套用分析參數",
-                   command=lambda: self.apply_config('analysis')).grid(row=4, column=0,
+                   command=lambda: self.apply_config('analysis')).grid(row=8, column=0,
                                                                        columnspan=2, pady=10)
         
         # 配置管理
@@ -471,12 +503,15 @@ class DrawerMonitorApp:
                 pid=self.config['camera']['pid']
             )
             
-            # 初始化狀態偵測器
+            # 初始化狀態偵測器（使用增強的多級濾波）
             self.state_detector = DrawerStateDetector(
-                self.config['thresholds']['open'],
-                self.config['thresholds']['closed'],
-                self.config['analysis']['filter_window'],
-                self.config['analysis']['min_state_duration']
+                threshold_open=self.config['thresholds']['open'],
+                threshold_closed=self.config['thresholds']['closed'],
+                filter_window=self.config['analysis']['filter_window'],
+                min_state_duration=self.config['analysis']['min_state_duration'],
+                ema_alpha=self.config['analysis']['ema_alpha'],
+                use_median_filter=self.config['analysis']['use_median_filter'],
+                state_lock_frames=self.config['analysis']['state_lock_frames']
             )
             
             # 重置數據
@@ -672,17 +707,23 @@ class DrawerMonitorApp:
                 msg = f"ROI 設定已更新：({x1},{y1}) 到 ({x2},{y2})"
                 
             elif section == 'analysis':
-                self.config['analysis']['use_depth_transform'] = self.use_transform_var.get()
-                self.config['analysis']['filter_window'] = self.filter_window_var.get()
-                self.config['analysis']['min_state_duration'] = self.min_state_duration_var.get()
+                self.config['analysis']['ema_alpha'] = self.ema_alpha_var.get()
+                self.config['analysis']['use_median_filter'] = self.use_median_filter_var.get()
+                self.config['analysis']['state_lock_frames'] = self.state_lock_frames_var.get()
                 
-                # 重新初始化狀態偵測器
+                # 重新初始化狀態偵測器（使用增強濾波）
                 if self.state_detector:
                     self.state_detector = DrawerStateDetector(
-                        self.config['thresholds']['open'],
-                        self.config['thresholds']['closed'],
-                        self.config['analysis']['filter_window'],
-                        self.config['analysis']['min_state_duration']
+                        threshold_open=self.config['thresholds']['open'],
+                        threshold_closed=self.config['thresholds']['closed'],
+                        filter_window=self.config['analysis']['filter_window'],
+                        min_state_duration=self.config['analysis']['min_state_duration'],
+                        ema_alpha=self.config['analysis']['ema_alpha'],
+                        use_median_filter=self.config['analysis']['use_median_filter'],
+                        state_lock_frames=self.config['analysis']['state_lock_frames']
+                    )
+                
+                msg = "分析參數已更新（已套用增強濾波）onfig['analysis']['min_state_duration']
                     )
                 
                 msg = "分析參數已更新"
@@ -775,11 +816,15 @@ class DrawerMonitorApp:
             self.threshold_open_slider.set(self.config['thresholds']['open'])
             self.threshold_closed_slider.set(self.config['thresholds']['closed'])
             
+            # 更新分析參數（包含增強濾波參數）
             self.use_transform_var.set(self.config['analysis']['use_depth_transform'])
             self.filter_window_var.set(self.config['analysis']['filter_window'])
             self.min_state_duration_var.set(self.config['analysis']['min_state_duration'])
+            self.ema_alpha_var.set(self.config['analysis']['ema_alpha'])
+            self.use_median_filter_var.set(self.config['analysis']['use_median_filter'])
+            self.state_lock_frames_var.set(self.config['analysis']['state_lock_frames'])
             
-            messagebox.showinfo("成功", f"配置已從 {self.config_file.name} 重新載入")
+            messagebox.showinfo("成功", f"配置已從 {self.config_file.name} 重新載入\n（含增強濾波設定）")
             
         except Exception as e:
             messagebox.showerror("錯誤", f"重新載入配置失敗:\n{str(e)}")

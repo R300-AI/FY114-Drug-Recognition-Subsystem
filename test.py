@@ -3,11 +3,12 @@
 Hardware / Module Test Runner for Drug Dispense Verify Subsystem
 
 Usage:
-    python test.py --picam --light --detector --encoder --matcher
+    python test.py --picam --light --drawer --detector --encoder --matcher
 
 Options:
     --picam      Test Raspberry Pi Camera Module (Picamera2)
     --light      Test WS2812 LED Ring Light
+    --drawer     Test MN96100C 2.5D Sensor + Depth Analysis
     --detector   Test BaseDetector: area filtering + detect_and_crop (no model)
     --encoder    Test BaseEncoder: forward, L2 normalization, encode_batch (no model)
     --matcher    Test BaseMatcher: empty-gallery guard + forward dispatch (no model)
@@ -106,6 +107,76 @@ def test_light() -> bool:
         return False
     except Exception as e:
         log(f"  ↳ Error: {e}")
+        return False
+
+
+def test_drawer() -> bool:
+    """Test MN96100C 2.5D Sensor + Depth Analysis"""
+    try:
+        from eminent.sensors.vision2p5d import VideoCapture
+        from utils.depth_analysis import DepthAnalyzer, DrawerStateDetector
+        
+        log("  ↳ Initializing MN96100C 2.5D Sensor...")
+        cap = VideoCapture(vid=0x04F3, pid=0x0C7E)
+        
+        log("  ↳ Capturing frame...")
+        ret, frame = cap.read()
+        cap.release()
+        
+        if not ret or frame is None:
+            log("  ↳ Failed to capture frame")
+            return False
+        
+        if frame.shape != (160, 160, 3):
+            log(f"  ↳ Unexpected frame shape: {frame.shape} (expected 160x160x3)")
+            return False
+        
+        log(f"  ↳ Frame captured (shape={frame.shape}) ✓")
+        
+        # Test DepthAnalyzer
+        log("  ↳ Testing DepthAnalyzer...")
+        analyzer = DepthAnalyzer()
+        gray = frame[:, :, 0]  # Use first channel as grayscale
+        
+        metrics = analyzer.calculate_depth_metrics(gray, use_transform=True)
+        log(f"  ↳ Depth metrics: mean={metrics['mean']:.4f}, std={metrics['std']:.4f}")
+        
+        if not (0.0 <= metrics['mean'] <= 1.0):
+            log(f"  ↳ Depth metric out of valid range [0, 1]: {metrics['mean']}")
+            return False
+        
+        log("  ↳ DepthAnalyzer ✓")
+        
+        # Test DrawerStateDetector
+        log("  ↳ Testing DrawerStateDetector...")
+        detector = DrawerStateDetector(
+            threshold_open=0.08,
+            threshold_closed=0.06,
+            filter_window=5,
+            min_state_duration=3
+        )
+        
+        # Feed multiple frames to test state detection
+        for i in range(5):
+            state = detector.update(metrics['mean'])
+            log(f"  ↳ Frame {i+1}: state={state}")
+        
+        if state not in ["完全開啟", "閉合中", "完全閉合", "未知"]:
+            log(f"  ↳ Invalid state: {state}")
+            return False
+        
+        log("  ↳ DrawerStateDetector ✓")
+        log("  ↳ MN96100C 2.5D Sensor + Depth Analysis ✓")
+        return True
+        
+    except ImportError as e:
+        log(f"  ↳ Module not found: {e}")
+        log("  ↳ Make sure eminent library and utils.depth_analysis are available")
+        return False
+    except Exception as e:
+        log(f"  ↳ Error: {e}")
+        import traceback
+        log(f"  ↳ {traceback.format_exc()}")
         return False
 
 
@@ -288,13 +359,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python test.py --picam --light --detector --encoder --matcher  # All tests
-  python test.py --detector --encoder --matcher                  # Module tests only (no hardware)
-  python test.py --picam                                         # Camera only
+  python test.py --picam --light --drawer --detector --encoder --matcher  # All tests
+  python test.py --detector --encoder --matcher                           # Module tests only (no hardware)
+  python test.py --picam --drawer                                         # Hardware tests only
+  python test.py --drawer                                                 # 2.5D sensor only
         """
     )
     parser.add_argument('--picam',    action='store_true', help='Test Raspberry Pi Camera Module')
     parser.add_argument('--light',    action='store_true', help='Test WS2812 LED Ring Light')
+    parser.add_argument('--drawer',   action='store_true', help='Test MN96100C 2.5D Sensor + Depth Analysis')
     parser.add_argument('--detector', action='store_true', help='Test BaseDetector (area filtering, no model)')
     parser.add_argument('--encoder',  action='store_true', help='Test BaseEncoder (L2 norm, no model)')
     parser.add_argument('--matcher',  action='store_true', help='Test BaseMatcher (guard + dispatch, no model)')
@@ -314,6 +387,8 @@ Examples:
         results['Pi Camera'] = run_test('Raspberry Pi Camera', test_picam)
     if args.light:
         results['LED Ring'] = run_test('WS2812 LED Ring Light', test_light)
+    if args.drawer:
+        results['2.5D Sensor'] = run_test('MN96100C 2.5D Sensor + Depth Analysis', test_drawer)
     if args.detector:
         results['Detector'] = run_test('BaseDetector', test_detector)
     if args.encoder:

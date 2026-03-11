@@ -6,6 +6,9 @@ numpy>=1.24.0,<2.0.0
 opencv-python>=4.8.0
 pillow>=10.0.0
 
+# GUI 與圖表（Drawer Monitor 所需）
+matplotlib>=3.7.0  # Drawer Monitor 時間序列圖表
+
 # 深度學習（CPU 版本）
 # 安裝 PyTorch CPU：
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
