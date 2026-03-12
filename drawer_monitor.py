@@ -1,10 +1,15 @@
-"""
-Drawer Closure Monitoring Application - Optimized Version
-抽屜閉合監測應用程式 - 優化版本
+"""Drawer Closure Monitoring Application - Production Version
+抽屜閉合監測應用程式 - 生產版本
 
-視窗大小：1024x600（與 run.py 一致）
-使用 Tab 切換：數據串流頁面 和 參數配置頁面
-配置自動同步到 drawer_config.yaml
+特性:
+- 物理層/顯示層分離架構
+- 所有配置從 YAML 讀取,無硬編碼
+- 視窗大小: 1024x600
+- Tab 切換: 數據串流頁面 和 參數配置頁面
+- 配置自動同步到 drawer_config.yaml
+
+Version: 2.0
+Date: 2026-03-12
 """
 
 import tkinter as tk
@@ -24,6 +29,51 @@ from pathlib import Path
 
 from eminent.sensors.vision2p5d import VideoCapture, MN96100CConfig
 from utils.depth_analysis import DepthAnalyzer, DrawerStateDetector
+
+
+def moving_average(data, window):
+    """
+    移动平均（自适应窗口）
+    
+    样本不足时：使用实际样本数作为分母
+    样本充足时：使用固定window size作为分母
+    
+    例如 window=10:
+      i=0: avg(data[0:1]) = data[0]/1
+      i=5: avg(data[0:6]) = sum(data[0:6])/6
+      i=9: avg(data[0:10]) = sum(data[0:10])/10  ← 第一次达到完整窗口
+      i=10+: avg(data[i-9:i+1]) = sum(...)/10    ← 始终使用10个样本
+    
+    Args:
+        data: 输入数据序列（deque或list）
+        window: 窗口大小
+    
+    Returns:
+        list: 平滑后的数据序列
+    """
+    if window < 1:
+        window = 1  # 最小窗口为1（不平滑）
+    
+    n = len(data)
+    if n == 0:
+        return []
+    
+    smoothed = []
+    data_list = list(data)  # 转换为list以支持索引
+    
+    for i in range(n):
+        # 样本不足时：从索引0开始
+        # 样本充足时：从索引i-window+1开始
+        start = max(0, i - window + 1)
+        
+        # 提取窗口数据：[start, i+1)
+        window_data = data_list[start:i + 1]
+        
+        # 分母是实际样本数（样本不足时<window，充足时=window）
+        avg = sum(window_data) / len(window_data)
+        smoothed.append(avg)
+    
+    return smoothed
 
 
 class DrawerMonitorApp:
@@ -50,8 +100,8 @@ class DrawerMonitorApp:
         # 數據存儲
         self.max_history = 500
         self.time_data = deque(maxlen=self.max_history)
-        self.depth_metric_data = deque(maxlen=self.max_history)
-        self.intensity_mean_data = deque(maxlen=self.max_history)
+        self.depth_metric_data = deque(maxlen=self.max_history)  # intensity_mean (0-255)
+        self.relative_dist_data = deque(maxlen=self.max_history)  # 1/√intensity，正比於相對距離
         
         self.start_time = time.time()
         self.frame_count = 0
@@ -60,35 +110,8 @@ class DrawerMonitorApp:
         self.depth_analyzer = DepthAnalyzer()
         self.state_detector = None
         
-        # 默認配置
-        self.config = {
-            'camera': {
-                'vid': 0x04F3,
-                'pid': 0x0C7E,
-                'frame_rate': 'QUARTER',
-                'led_current': 'ULTRA_HIGH',
-                'exposure_setting': 'DEFAULT'
-            },
-            'roi': {
-                'enabled': False,
-                'x1': 40,
-                'y1': 40,
-                'x2': 120,
-                'y2': 120
-            },
-            'thresholds': {
-                'open': 0.08,
-                'closed': 0.06
-            },
-            'analysis': {
-                'use_depth_transform': True,
-                'filter_window': 15,          # 濾波窗口（增強至15，約2秒歷史）
-                'min_state_duration': 10,     # 狀態確認幀數（增強至10，約1.2秒）
-                'ema_alpha': 0.2,             # EMA平滑係數（降低至0.2，更平滑）
-                'use_median_filter': True,    # 啟用中值濾波（去除尖峰噪聲）
-                'state_lock_frames': 20       # 狀態鎖定幀數（增強至20，約2.5秒）
-            }
-        }
+        # 配置（只从YAML加载，不硬编码）
+        self.config = None
         
         # 加載配置
         self.load_config()
@@ -172,50 +195,50 @@ class DrawerMonitorApp:
         self.image_label.image = self.placeholder_photo
         
         # 閾值調整 Slider
-        threshold_frame = ttk.LabelFrame(left_panel, text="閾值調整", padding=10)
+        threshold_frame = ttk.LabelFrame(left_panel, text="閾值調整（強度值 0-255）", padding=10)
         threshold_frame.pack(fill=tk.X, pady=5)
         
-        # Open 閾值 Slider
-        ttk.Label(threshold_frame, text="開啟閾值：", font=('Arial', 9)
+        # Closed 閾值 Slider（高值）
+        ttk.Label(threshold_frame, text="閉合閾值（高）：", font=('Arial', 9)
                   ).grid(row=0, column=0, sticky=tk.W, pady=3)
-        
-        self.threshold_open_slider = tk.Scale(
-            threshold_frame, 
-            from_=0.0, to=1.0, resolution=0.001,
-            orient=tk.HORIZONTAL,
-            command=self.on_threshold_open_change,
-            length=300
-        )
-        self.threshold_open_slider.set(self.config['thresholds']['open'])
-        self.threshold_open_slider.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=3)
-        
-        self.threshold_open_value_label = ttk.Label(
-            threshold_frame, 
-            text=f"{self.config['thresholds']['open']:.3f}",
-            font=('Arial', 9, 'bold')
-        )
-        self.threshold_open_value_label.grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
-        
-        # Closed 閾值 Slider
-        ttk.Label(threshold_frame, text="閉合閾值：", font=('Arial', 9)
-                  ).grid(row=1, column=0, sticky=tk.W, pady=3)
         
         self.threshold_closed_slider = tk.Scale(
             threshold_frame,
-            from_=0.0, to=1.0, resolution=0.001,
+            from_=0, to=255, resolution=1,
             orient=tk.HORIZONTAL,
             command=self.on_threshold_closed_change,
             length=300
         )
         self.threshold_closed_slider.set(self.config['thresholds']['closed'])
-        self.threshold_closed_slider.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=3)
+        self.threshold_closed_slider.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=3)
         
         self.threshold_closed_value_label = ttk.Label(
             threshold_frame,
-            text=f"{self.config['thresholds']['closed']:.3f}",
+            text=f"{int(self.config['thresholds']['closed'])}",
             font=('Arial', 9, 'bold')
         )
-        self.threshold_closed_value_label.grid(row=1, column=2, sticky=tk.W, padx=5, pady=3)
+        self.threshold_closed_value_label.grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
+        
+        # Open 閾值 Slider（低值）
+        ttk.Label(threshold_frame, text="開啟閾值（低）：", font=('Arial', 9)
+                  ).grid(row=1, column=0, sticky=tk.W, pady=3)
+        
+        self.threshold_open_slider = tk.Scale(
+            threshold_frame, 
+            from_=0, to=255, resolution=1,
+            orient=tk.HORIZONTAL,
+            command=self.on_threshold_open_change,
+            length=300
+        )
+        self.threshold_open_slider.set(self.config['thresholds']['open'])
+        self.threshold_open_slider.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=3)
+        
+        self.threshold_open_value_label = ttk.Label(
+            threshold_frame, 
+            text=f"{int(self.config['thresholds']['open'])}",
+            font=('Arial', 9, 'bold')
+        )
+        self.threshold_open_value_label.grid(row=1, column=2, sticky=tk.W, padx=5, pady=3)
         
         # 配置列權重
         threshold_frame.columnconfigure(1, weight=1)
@@ -230,10 +253,10 @@ class DrawerMonitorApp:
         # 創建圖表
         self.fig = Figure(figsize=(6, 5), dpi=80)
         
-        # 上圖：深度指標
+        # 上圖：強度指標
         self.ax1 = self.fig.add_subplot(211)
-        self.ax1.set_ylabel('Depth Metric', fontsize=9)
-        self.ax1.set_title('Depth Time Series (Physical Model)', fontsize=10)
+        self.ax1.set_ylabel('Intensity (0-255)', fontsize=9)
+        self.ax1.set_title('Drawer Intensity (High=Near/Closed, Low=Far/Open)', fontsize=10)
         self.ax1.grid(True, alpha=0.3)
         self.ax1.tick_params(labelsize=8)
         
@@ -352,80 +375,80 @@ class DrawerMonitorApp:
         
         # === 第二列：分析參數 + 配置管理 ===
         
-        # 分析參數（增強濾波控制）
-        analysis_frame = ttk.LabelFrame(container, text="分析參數（增強濾波）", padding=15)
+        # 分析參數（物理层 - 最簡化）
+        analysis_frame = ttk.LabelFrame(container, text="分析参数(物理层)", padding=15)
         analysis_frame.grid(row=0, column=1, sticky=(tk.N, tk.W, tk.E), padx=5, pady=5)
         
-        self.use_transform_var = tk.BooleanVar(
-            value=self.config['analysis']['use_depth_transform'])
-        ttk.Checkbutton(analysis_frame, text="使用物理模型深度轉換（推薦）",
-                        variable=self.use_transform_var
-                        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=3)
+        ttk.Label(analysis_frame, 
+                  text="核心算法：直接使用 intensity_mean (0-255)",
+                  font=('Arial', 9, 'bold')).grid(row=0, column=0, columnspan=2, pady=5)
         
-        # 基礎濾波參數
-        ttk.Label(analysis_frame, text="濾波窗口大小 (8-15):", font=('Arial', 9)
+        ttk.Label(analysis_frame, text="狀態持續幀數 (3-15):", font=('Arial', 9)
                   ).grid(row=1, column=0, sticky=tk.W, pady=3)
-        self.filter_window_var = tk.IntVar(value=self.config['analysis']['filter_window'])
-        ttk.Spinbox(analysis_frame, from_=5, to=20, textvariable=self.filter_window_var,
-                    width=15).grid(row=1, column=1, pady=3, padx=5)
-        
-        ttk.Label(analysis_frame, text="狀態持續幀數 (6-10):", font=('Arial', 9)
-                  ).grid(row=2, column=0, sticky=tk.W, pady=3)
         self.min_state_duration_var = tk.IntVar(
             value=self.config['analysis']['min_state_duration'])
         ttk.Spinbox(analysis_frame, from_=3, to=15,
                     textvariable=self.min_state_duration_var,
-                    width=15).grid(row=2, column=1, pady=3, padx=5)
-        
-        # 高級濾波參數
-        ttk.Separator(analysis_frame, orient='horizontal').grid(
-            row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
-        
-        ttk.Label(analysis_frame, text="EMA 平滑係數 (0.1-0.5):", font=('Arial', 9)
-                  ).grid(row=4, column=0, sticky=tk.W, pady=3)
-        self.ema_alpha_var = tk.DoubleVar(value=self.config['analysis']['ema_alpha'])
-        ema_frame = ttk.Frame(analysis_frame)
-        ema_frame.grid(row=4, column=1, pady=3, padx=5, sticky=tk.W)
-        ttk.Spinbox(ema_frame, from_=0.1, to=0.5, increment=0.05,
-                    textvariable=self.ema_alpha_var, width=8).pack(side=tk.LEFT)
-        ttk.Label(ema_frame, text="越小越平滑", font=('Arial', 7),
-                  foreground='gray').pack(side=tk.LEFT, padx=3)
-        
-        ttk.Label(analysis_frame, text="狀態鎖定幀數 (10-20):", font=('Arial', 9)
-                  ).grid(row=5, column=0, sticky=tk.W, pady=3)
-        self.state_lock_frames_var = tk.IntVar(
-            value=self.config['analysis']['state_lock_frames'])
-        ttk.Spinbox(analysis_frame, from_=5, to=30,
-                    textvariable=self.state_lock_frames_var,
-                    width=15).grid(row=5, column=1, pady=3, padx=5)
-        
-        self.use_median_filter_var = tk.BooleanVar(
-            value=self.config['analysis']['use_median_filter'])
-        ttk.Checkbutton(analysis_frame, text="啟用中值濾波（去除尖峰噪聲）",
-                        variable=self.use_median_filter_var
-                        ).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=3)
+                    width=15).grid(row=1, column=1, pady=3, padx=5)
         
         ttk.Label(analysis_frame,
-                  text="💡 建議：近距離高噪聲環境使用\n   窗口10、持續8、EMA 0.3、鎖定15",
+                  text="💡 intensity高=近(關閉), intensity低=遠(打開)\n   不做任何複雜轉換",
                   font=('Arial', 8), foreground='#0066cc', justify=tk.LEFT
-                  ).grid(row=7, column=0, columnspan=2, pady=8)
+                  ).grid(row=2, column=0, columnspan=2, pady=8)
         
         ttk.Button(analysis_frame, text="套用分析參數",
-                   command=lambda: self.apply_config('analysis')).grid(row=8, column=0,
+                   command=lambda: self.apply_config('analysis')).grid(row=3, column=0,
                                                                        columnspan=2, pady=10)
         
-        # 配置管理
-        manage_frame = ttk.LabelFrame(container, text="配置管理", padding=15)
-        manage_frame.grid(row=1, column=1, sticky=(tk.N, tk.W, tk.E), padx=5, pady=5)
+        # 显示参数 + 配置管理（合并为一个区块，确保每列只有2个区域）
+        display_frame = ttk.LabelFrame(container, text="显示参数 & 配置管理", padding=15)
+        display_frame.grid(row=1, column=1, sticky=(tk.N, tk.W, tk.E), padx=5, pady=5)
         
-        ttk.Label(manage_frame, text=f"配置文件：{self.config_file.name}",
-                  font=('Arial', 9)).pack(pady=5)
+        # 启用MA平滑开关
+        self.enable_smoothing_var = tk.BooleanVar(
+            value=self.config['display'].get('enable_smoothing', True))
+        ttk.Checkbutton(display_frame, text="启用 Moving Average 平滑",
+                        variable=self.enable_smoothing_var
+                        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=3)
         
-        ttk.Button(manage_frame, text="全部套用並儲存",
-                   command=self.save_all_config).pack(fill=tk.X, pady=5)
+        ttk.Label(display_frame, text="平滑窗口大小 (1-30):", font=('Arial', 9)
+                  ).grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.smoothing_window_var = tk.IntVar(
+            value=self.config['display']['smoothing_window'])
+        ttk.Spinbox(display_frame, from_=1, to=30,
+                    textvariable=self.smoothing_window_var,
+                    width=15).grid(row=1, column=1, pady=3, padx=5)
         
-        ttk.Button(manage_frame, text="重新載入配置",
-                   command=self.reload_config).pack(fill=tk.X, pady=5)
+        self.show_raw_data_var = tk.BooleanVar(
+            value=self.config['display']['show_raw_data'])
+        ttk.Checkbutton(display_frame, text="同时显示原始数据",
+                        variable=self.show_raw_data_var
+                        ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=3)
+        
+        ttk.Label(display_frame,
+                  text="💡 关闭平滑可确认原始数据质量",
+                  font=('Arial', 8), foreground='#0066cc', justify=tk.LEFT
+                  ).grid(row=3, column=0, columnspan=2, pady=5)
+        
+        ttk.Button(display_frame, text="套用显示參數",
+                   command=lambda: self.apply_config('display')).grid(row=4, column=0,
+                                                                      columnspan=2, pady=5)
+        
+        # 分隔线
+        ttk.Separator(display_frame, orient='horizontal').grid(row=5, column=0, 
+                                                                columnspan=2, sticky='ew', pady=10)
+        
+        # 配置管理部分
+        ttk.Label(display_frame, text=f"配置文件：{self.config_file.name}",
+                  font=('Arial', 9)).grid(row=6, column=0, columnspan=2, pady=5)
+        
+        ttk.Button(display_frame, text="全部套用並儲存",
+                   command=self.save_all_config).grid(row=7, column=0, columnspan=2, 
+                                                      sticky='ew', pady=3)
+        
+        ttk.Button(display_frame, text="重新載入配置",
+                   command=self.reload_config).grid(row=8, column=0, columnspan=2,
+                                                    sticky='ew', pady=3)
         
         # 配置 Canvas 和 Scrollbar
         canvas.pack(side="left", fill="both", expand=True)
@@ -433,9 +456,16 @@ class DrawerMonitorApp:
     
     def on_threshold_open_change(self, value):
         """Open 閾值 Slider 變動時的回調"""
-        value = float(value)
+        value = int(float(value))
+        
+        # 驗證：open必須小於closed（intensity邏輯）
+        if value >= self.config['thresholds']['closed']:
+            print(f"警告：Open閾值({value})必須小於Closed閾值({int(self.config['thresholds']['closed'])})")
+            value = int(self.config['thresholds']['closed']) - 1
+            self.threshold_open_slider.set(value)
+        
         self.config['thresholds']['open'] = value
-        self.threshold_open_value_label.config(text=f"{value:.3f}")
+        self.threshold_open_value_label.config(text=f"{value}")
         
         # 更新狀態偵測器
         if self.state_detector:
@@ -446,9 +476,16 @@ class DrawerMonitorApp:
     
     def on_threshold_closed_change(self, value):
         """Closed 閾值 Slider 變動時的回調"""
-        value = float(value)
+        value = int(float(value))
+        
+        # 驗證：closed必須大於open（intensity邏輯）
+        if value <= self.config['thresholds']['open']:
+            print(f"警告：Closed閾值({value})必須大於Open閾值({int(self.config['thresholds']['open'])})")
+            value = int(self.config['thresholds']['open']) + 1
+            self.threshold_closed_slider.set(value)
+        
         self.config['thresholds']['closed'] = value
-        self.threshold_closed_value_label.config(text=f"{value:.3f}")
+        self.threshold_closed_value_label.config(text=f"{value}")
         
         # 更新狀態偵測器
         if self.state_detector:
@@ -503,21 +540,17 @@ class DrawerMonitorApp:
                 pid=self.config['camera']['pid']
             )
             
-            # 初始化狀態偵測器（使用增強的多級濾波）
+            # 初始化状态侦测器（基于物理数据，不做复杂滤波）
             self.state_detector = DrawerStateDetector(
                 threshold_open=self.config['thresholds']['open'],
                 threshold_closed=self.config['thresholds']['closed'],
-                filter_window=self.config['analysis']['filter_window'],
-                min_state_duration=self.config['analysis']['min_state_duration'],
-                ema_alpha=self.config['analysis']['ema_alpha'],
-                use_median_filter=self.config['analysis']['use_median_filter'],
-                state_lock_frames=self.config['analysis']['state_lock_frames']
+                min_state_duration=self.config['analysis']['min_state_duration']
             )
             
             # 重置數據
             self.time_data.clear()
             self.depth_metric_data.clear()
-            self.intensity_mean_data.clear()
+            self.relative_dist_data.clear()
             self.start_time = time.time()
             self.frame_count = 0
             
@@ -552,10 +585,14 @@ class DrawerMonitorApp:
     
     def capture_loop(self):
         """相機捕獲循環"""
+        consecutive_failures = 0
+        MAX_CONSECUTIVE_FAILURES = 30  # 連續失敗上限，超過則判定相機掉線
+
         while self.is_running:
             ret, frame = self.cap.read()
-            
+
             if ret and frame is not None:
+                consecutive_failures = 0  # 成功讀取時重置計數
                 self.frame_count += 1
                 current_time = time.time() - self.start_time
                 
@@ -573,31 +610,43 @@ class DrawerMonitorApp:
                     roi = gray
                 
                 # 計算深度指標
-                metrics = self.depth_analyzer.calculate_depth_metrics(
-                    roi, use_transform=self.config['analysis']['use_depth_transform']
-                )
-                
-                depth_metric = metrics['mean']
-                intensity_mean = metrics['intensity_mean']
-                
+                metrics = self.depth_analyzer.calculate_depth_metrics(roi)
+
+                depth_metric = metrics['mean']            # intensity_mean (0-255)
+                relative_dist = metrics['relative_distance']  # 1/√intensity，正比於相對距離
+
                 # 狀態判斷
                 if self.state_detector:
                     drawer_status = self.state_detector.update(depth_metric)
                 else:
                     drawer_status = "未知"
-                
+
                 # 更新數據
                 self.time_data.append(current_time)
                 self.depth_metric_data.append(depth_metric)
-                self.intensity_mean_data.append(intensity_mean)
-                
+                self.relative_dist_data.append(relative_dist)
+
                 # 更新 UI
-                self.root.after(0, self.update_ui, frame, drawer_status,
-                                depth_metric, intensity_mean)
+                self.root.after(0, self.update_ui, frame, drawer_status, depth_metric)
             else:
+                consecutive_failures += 1
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    self.root.after(0, self._on_camera_disconnect)
+                    break
                 time.sleep(0.01)
-    
-    def update_ui(self, frame, drawer_status, depth_metric, intensity_mean):
+
+    def _on_camera_disconnect(self):
+        """相機掉線處理：清理資源並通知使用者"""
+        self.is_running = False
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        self.start_button.config(state='normal')
+        self.stop_button.config(state='disabled')
+        self.drawer_status_label.config(text="掉線", foreground='red')
+        messagebox.showerror("相機掉線", "連續讀取失敗，相機可能已斷線。\n請檢查 USB 連接後重新啟動相機。")
+
+    def update_ui(self, frame, drawer_status, depth_metric):
         """更新 UI"""
         # 更新圖像（320x320，適配窗口尺寸）
         display_frame = cv2.resize(frame, (320, 320),
@@ -626,45 +675,85 @@ class DrawerMonitorApp:
         self.update_chart()
     
     def update_chart(self):
-        """更新圖表"""
+        """更新圖表（显示层平滑处理）"""
         if len(self.time_data) < 2:
             return
         
-        # 上圖：深度指標
+        # 上圖：深度指標（应用显示层平滑）
         self.ax1.clear()
-        self.ax1.plot(list(self.time_data), list(self.depth_metric_data),
-                      'b-', linewidth=2, label='Depth Metric')
         
-        if len(self.time_data) > 0:
-            time_range = [self.time_data[0], self.time_data[-1]]
-            self.ax1.plot(time_range,
-                          [self.config['thresholds']['open']] * 2,
-                          'r--', label='Open Threshold', alpha=0.7, linewidth=1.5)
+        # 获取平滑参数
+        smoothing_window = self.config['display']['smoothing_window']
+        show_raw = self.config['display']['show_raw_data']
+        enable_smoothing = self.config['display'].get('enable_smoothing', True)
+        
+        # 原始数据（物理层）
+        raw_data = list(self.depth_metric_data)
+        time_data = list(self.time_data)
+        
+        # 根据开关决定是否应用移动平均平滑
+        if enable_smoothing:
+            smoothed_data = moving_average(raw_data, smoothing_window)
+            display_data = smoothed_data
+            label_suffix = f' (MA W={smoothing_window})'
+        else:
+            display_data = raw_data
+            label_suffix = ' (Raw)'
+        
+        # 绘制数据
+        if show_raw and enable_smoothing:
+            # 同时显示原始数据和平滑数据
+            self.ax1.plot(time_data, raw_data,
+                          'b-', linewidth=1, alpha=0.3, label='Raw Data')
+            self.ax1.plot(time_data, display_data,
+                          'b-', linewidth=2, label=f'Smoothed (W={smoothing_window})')
+        else:
+            # 只显示主数据
+            self.ax1.plot(time_data, display_data,
+                          'b-', linewidth=2, label=f'Intensity{label_suffix}')
+        
+        # 绘制阈值线
+        if len(time_data) > 0:
+            time_range = [time_data[0], time_data[-1]]
             self.ax1.plot(time_range,
                           [self.config['thresholds']['closed']] * 2,
-                          'g--', label='Closed Threshold', alpha=0.7, linewidth=1.5)
+                          'r--', label=f'Closed Threshold ({int(self.config["thresholds"]["closed"])})',
+                          alpha=0.7, linewidth=1.5)
+            self.ax1.plot(time_range,
+                          [self.config['thresholds']['open']] * 2,
+                          'g--', label=f'Open Threshold ({int(self.config["thresholds"]["open"])})',
+                          alpha=0.7, linewidth=1.5)
         
-        self.ax1.set_ylabel('Depth Metric', fontsize=9)
-        self.ax1.set_ylim(0, 1.0)  # 固定y軸範圍為理論極限
-        title = 'Depth Time Series'
-        if self.config['analysis']['use_depth_transform']:
-            title += ' (Physical Model)'
-        else:
-            title += ' (Raw Intensity)'
+        self.ax1.set_ylabel('Intensity (0-255)', fontsize=9)
+        self.ax1.set_ylim(0, 255)  # 固定y軸範圍為0-255（強度值）
+        smoothing_status = 'Smoothed' if self.config['display'].get('enable_smoothing', True) else 'Raw'
+        title = f'Drawer Intensity ({smoothing_status})'
         self.ax1.set_title(title, fontsize=10)
         self.ax1.legend(loc='upper right', fontsize=8)
         self.ax1.grid(True, alpha=0.3)
         self.ax1.tick_params(labelsize=8)
         
-        # 下圖：原始強度
+        # 下圖：相對距離指標（1/√intensity，正比於實際距離）
         self.ax2.clear()
-        self.ax2.plot(list(self.time_data), list(self.intensity_mean_data),
-                      'orange', linewidth=1.5, label='Reflection Intensity')
-        
+        self.ax2.plot(time_data, list(self.relative_dist_data),
+                      'orange', linewidth=1.5, label='Relative Distance (1/√I)')
+
+        # 繪製對應的距離閾值線（從 intensity 閾值換算）
+        if len(time_data) > 0:
+            time_range = [time_data[0], time_data[-1]]
+            closed_dist = 1.0 / np.sqrt(max(self.config['thresholds']['closed'], 1))
+            open_dist = 1.0 / np.sqrt(max(self.config['thresholds']['open'], 1))
+            self.ax2.plot(time_range, [closed_dist] * 2,
+                          'r--', alpha=0.7, linewidth=1.5,
+                          label=f'Closed ({closed_dist:.3f})')
+            self.ax2.plot(time_range, [open_dist] * 2,
+                          'g--', alpha=0.7, linewidth=1.5,
+                          label=f'Open ({open_dist:.3f})')
+
         self.ax2.set_xlabel('Time (seconds)', fontsize=9)
-        self.ax2.set_ylabel('Intensity Value', fontsize=9)
-        self.ax2.set_ylim(0, 255)  # 固定y軸範圍為8-bit極限
-        self.ax2.set_title('Reflection Light Intensity', fontsize=10)
+        self.ax2.set_ylabel('Relative Distance (1/√I)', fontsize=9)
+        self.ax2.set_ylim(0.05, 1.05)  # 理論範圍：1/√255≈0.063 ~ 1/√1=1.0
+        self.ax2.set_title('Relative Distance: High=Far/Open, Low=Near/Closed', fontsize=10)
         self.ax2.legend(loc='upper right', fontsize=8)
         self.ax2.grid(True, alpha=0.3)
         self.ax2.tick_params(labelsize=8)
@@ -707,23 +796,23 @@ class DrawerMonitorApp:
                 msg = f"ROI 設定已更新：({x1},{y1}) 到 ({x2},{y2})"
                 
             elif section == 'analysis':
-                self.config['analysis']['ema_alpha'] = self.ema_alpha_var.get()
-                self.config['analysis']['use_median_filter'] = self.use_median_filter_var.get()
-                self.config['analysis']['state_lock_frames'] = self.state_lock_frames_var.get()
+                self.config['analysis']['min_state_duration'] = self.min_state_duration_var.get()
                 
-                # 重新初始化狀態偵測器（使用增強濾波）
+                # 重新初始化狀態偵測器
                 if self.state_detector:
                     self.state_detector = DrawerStateDetector(
                         threshold_open=self.config['thresholds']['open'],
                         threshold_closed=self.config['thresholds']['closed'],
-                        filter_window=self.config['analysis']['filter_window'],
-                        min_state_duration=self.config['analysis']['min_state_duration'],
-                        ema_alpha=self.config['analysis']['ema_alpha'],
-                        use_median_filter=self.config['analysis']['use_median_filter'],
-                        state_lock_frames=self.config['analysis']['state_lock_frames']
+                        min_state_duration=self.config['analysis']['min_state_duration']
                     )
                 
-                msg = "分析參數已更新(已套用增強濾波)"
+                msg = "分析參數已更新"
+            
+            elif section == 'display':
+                self.config['display']['smoothing_window'] = self.smoothing_window_var.get()
+                self.config['display']['show_raw_data'] = self.show_raw_data_var.get()
+                self.config['display']['enable_smoothing'] = self.enable_smoothing_var.get()
+                msg = "显示參數已更新"
             
             # 自動儲存到 YAML
             self.save_config()
@@ -746,9 +835,15 @@ class DrawerMonitorApp:
             self.config['roi']['y2'] = self.roi_y2_var.get()
             self.config['roi']['enabled'] = self.roi_enabled_var.get()
             
-            self.config['analysis']['use_depth_transform'] = self.use_transform_var.get()
-            self.config['analysis']['filter_window'] = self.filter_window_var.get()
+            # 从 Slider 获取阈值
+            self.config['thresholds']['open'] = int(self.threshold_open_slider.get())
+            self.config['thresholds']['closed'] = int(self.threshold_closed_slider.get())
+            
             self.config['analysis']['min_state_duration'] = self.min_state_duration_var.get()
+            
+            self.config['display']['smoothing_window'] = self.smoothing_window_var.get()
+            self.config['display']['show_raw_data'] = self.show_raw_data_var.get()
+            self.config['display']['enable_smoothing'] = self.enable_smoothing_var.get()
             
             # 儲存到 YAML
             self.save_config()
@@ -763,35 +858,100 @@ class DrawerMonitorApp:
             # 確保配置目錄存在
             self.config_file.parent.mkdir(parents=True, exist_ok=True)
             
+            # 確保配置完整性
+            if not self.config or not isinstance(self.config, dict):
+                raise ValueError("配置數據無效")
+            
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.config, f, default_flow_style=False,
                           allow_unicode=True, sort_keys=False)
         except Exception as e:
-            print(f"儲存配置失敗: {str(e)}")
+            error_msg = f"儲存配置失敗: {str(e)}"
+            print(error_msg)
+            raise Exception(error_msg)
     
     def load_config(self):
         """從 YAML 檔案載入配置"""
         if not self.config_file.exists():
-            # 如果配置檔案不存在，創建默認配置
-            self.save_config()
-            return
+            print(f"配置文件不存在，創建默認配置: {self.config_file}")
+            self._create_default_config_file()
         
         try:
             with open(self.config_file, 'r', encoding='utf-8') as f:
-                loaded_config = yaml.safe_load(f)
-                if loaded_config:
-                    # 遞迴更新配置（保留默認值）
-                    self._update_dict(self.config, loaded_config)
+                self.config = yaml.safe_load(f)
+                if not self.config or not isinstance(self.config, dict):
+                    raise ValueError("配置文件為空或格式錯誤")
+                
+                # 驗證必要的配置項
+                required_sections = ['camera', 'roi', 'thresholds', 'analysis', 'display']
+                for section in required_sections:
+                    if section not in self.config:
+                        raise ValueError(f"配置文件缺少必要部分: {section}")
+                
+                # 驗證並修正閾值順序（closed必須大於open，遮擋比例邏輯）
+                threshold_open = self.config['thresholds']['open']
+                threshold_closed = self.config['thresholds']['closed']
+                if threshold_closed <= threshold_open:
+                    print(f"警告：閾值順序錯誤 (closed={threshold_closed:.3f} <= open={threshold_open:.3f})")
+                    print(f"自動修正：交換閾值順序")
+                    self.config['thresholds']['open'] = threshold_closed
+                    self.config['thresholds']['closed'] = threshold_open
+                    self.save_config()
+                
+                print(f"配置載入成功: {self.config_file}")
         except Exception as e:
             print(f"載入配置失敗: {str(e)}")
+            print("重新創建默認配置...")
+            self._create_default_config_file()
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                self.config = yaml.safe_load(f)
+            print("默認配置已創建並載入")
     
-    def _update_dict(self, target, source):
-        """遞迴更新字典"""
-        for key, value in source.items():
-            if key in target and isinstance(target[key], dict) and isinstance(value, dict):
-                self._update_dict(target[key], value)
-            else:
-                target[key] = value
+    def _create_default_config_file(self):
+        """創建默認配置文件"""
+        default_config = {
+            'camera': {
+                'vid': 0x04F3,
+                'pid': 0x0C7E,
+                'frame_rate': 'QUARTER',
+                'led_current': 'ULTRA_HIGH',
+                'exposure_setting': 'DEFAULT'
+            },
+            'roi': {
+                'enabled': False,
+                'x1': 40,
+                'y1': 40,
+                'x2': 120,
+                'y2': 120
+            },
+            'thresholds': {
+                'open': 80,
+                'closed': 150
+            },
+            'analysis': {
+                'min_state_duration': 5,
+                'history_size': 500
+            },
+            'display': {
+                'smoothing_window': 10,
+                'show_raw_data': False,
+                'enable_smoothing': True
+            }
+        }
+        
+        try:
+            # 確保配置目錄存在
+            self.config_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 寫入默認配置
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                yaml.dump(default_config, f, default_flow_style=False,
+                          allow_unicode=True, sort_keys=False)
+            
+            print(f"默認配置文件已創建: {self.config_file}")
+        except Exception as e:
+            print(f"創建默認配置失敗: {str(e)}")
+            raise
     
     def reload_config(self):
         """重新載入配置"""
@@ -809,19 +969,19 @@ class DrawerMonitorApp:
             self.roi_x2_var.set(self.config['roi']['x2'])
             self.roi_y2_var.set(self.config['roi']['y2'])
             
-            # 更新 Slider 值（TAB1）
-            self.threshold_open_slider.set(self.config['thresholds']['open'])
+            # 更新 Slider 值（TAB1）- 注意順序：closed（高）在上，open（低）在下
             self.threshold_closed_slider.set(self.config['thresholds']['closed'])
+            self.threshold_open_slider.set(self.config['thresholds']['open'])
             
-            # 更新分析參數（包含增強濾波參數）
-            self.use_transform_var.set(self.config['analysis']['use_depth_transform'])
-            self.filter_window_var.set(self.config['analysis']['filter_window'])
+            # 更新分析參數（物理层）
             self.min_state_duration_var.set(self.config['analysis']['min_state_duration'])
-            self.ema_alpha_var.set(self.config['analysis']['ema_alpha'])
-            self.use_median_filter_var.set(self.config['analysis']['use_median_filter'])
-            self.state_lock_frames_var.set(self.config['analysis']['state_lock_frames'])
             
-            messagebox.showinfo("成功", f"配置已從 {self.config_file.name} 重新載入\n（含增強濾波設定）")
+            # 更新显示参数（显示层）
+            self.smoothing_window_var.set(self.config['display']['smoothing_window'])
+            self.show_raw_data_var.set(self.config['display']['show_raw_data'])
+            self.enable_smoothing_var.set(self.config['display'].get('enable_smoothing', True))
+            
+            messagebox.showinfo("成功", f"配置已從 {self.config_file.name} 重新載入")
             
         except Exception as e:
             messagebox.showerror("錯誤", f"重新載入配置失敗:\n{str(e)}")

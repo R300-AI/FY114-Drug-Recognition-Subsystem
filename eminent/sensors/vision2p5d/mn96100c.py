@@ -1,5 +1,5 @@
 #--------------------------------------------------------------------
-# Project  : MN98100C
+# Project  : MN96100C
 # Author   : Charlie Wang
 # Date     : 2025.9.10
 # Versuion : 1.0.20250910
@@ -104,16 +104,21 @@ class USBDeviceComm:
             return None
 
     def get_image(self):
-        # Fetch frame image command 
+        # Fetch frame image command
         self.send_command([0x44, 0xFF, 0x01])
         time.sleep(0.1)
         # Receive frame data (160x160)
         self.send_command([0x44, 0xF3, 0x00])
-             
-        data, context = self.receive_data(25602)
-        
-        if data:
-            return data, context
-        else:
+
+        result = self.receive_data(25602)
+
+        if result is None:
             print("Failed to get image data.")
-            return None
+            return None, None
+
+        data, context = result
+        if not data:
+            print("Failed to get image data.")
+            return None, None
+
+        return data, context

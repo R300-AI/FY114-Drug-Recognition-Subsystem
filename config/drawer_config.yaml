@@ -1,7 +1,7 @@
 camera:
   vid: 1267
   pid: 3198
-  frame_rate: HALF
+  frame_rate: QUARTER
   led_current: ULTRA_HIGH
   exposure_setting: DEFAULT
 roi:
@@ -11,9 +11,12 @@ roi:
   x2: 120
   y2: 120
 thresholds:
-  open: 0.352
-  closed: 0.642
+  open: 80
+  closed: 150
 analysis:
-  use_depth_transform: true
-  filter_window: 13
-  min_state_duration: 9
+  min_state_duration: 5
+  history_size: 500
+display:
+  smoothing_window: 10
+  show_raw_data: false
+  enable_smoothing: true

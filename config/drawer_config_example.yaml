@@ -1,6 +1,6 @@
-# Drawer Monitor 推薦配置範例
+# Drawer Monitor 配置範例
 # 路徑：config/drawer_config.yaml
-# 說明：此配置針對近距離高噪聲環境優化
+# 說明：物理层/显示层分离架构配置
 
 camera:
   frame_rate: QUARTER        # 幀率 (FULL/HALF/QUARTER/EIGHTH/SIXTEENTH)
@@ -20,44 +20,54 @@ thresholds:
   open: 0.08                 # 開啟閾值（depth_metric > 0.08 為完全開啟）
   closed: 0.06               # 閉合閾值（depth_metric < 0.06 為完全閉合）
 
-# ===== 增強濾波參數（v2.1 新增，針對0.5秒周期噪聲優化）=====
+# ===== 分析参数（物理层）=====
 analysis:
-  use_depth_transform: true           # 使用物理模型深度轉換（推薦啟用）
+  use_depth_transform: true           # 使用物理模型深度轉換（1/√intensity）
+                                      # 推薦啟用：反映真實距離關係
   
-  # 基礎濾波參數（針對高頻噪聲加強）
-  filter_window: 15                   # 濾波窗口大小 (12-20)
-                                      # 值越大越平滑，但響應越慢
-                                      # 推薦：15（約 2 秒響應，可抑制0.5秒周期噪聲）
-  
-  min_state_duration: 10              # 狀態持續幀數 (8-12)
+  min_state_duration: 5               # 狀態持續幀數 (3-15)
                                       # 新狀態需持續此幀數才確認變更
-                                      # 推薦：10（約 1.2 秒確認，有效防止誤報）
-  
-  # 高級濾波參數（針對0.5秒周期噪聲強化）
-  ema_alpha: 0.2                      # EMA 平滑係數 (0.15-0.3)
-                                      # 值越小越平滑（0.2=20%新數據+80%歷史）
-                                      # 推薦：0.2（強力平滑，抑制高頻波動）
-  
-  use_median_filter: true             # 啟用中值濾波（去除尖峰噪聲）
-                                      # 推薦：始終啟用（關鍵！）
-  
-  state_lock_frames: 20               # 狀態鎖定幀數 (15-30)
-                                      # 狀態變更後鎖定此幀數，防止快速回跳
-                                      # 推薦：20（約 2.5 秒鎖定，防止0.5秒周期干擾）
+                                      # 推薦：5（約 0.6 秒，防止瞬間抖动）
+                                      # 物理层：只做基本状态确认，不做复杂滤波
   
   history_size: 500                   # 時間序列歷史保存幀數
 
-# ===== 配置方案參考 =====
+# ===== 显示参数（显示层平滑）=====
+display:
+  smoothing_window: 10                # 移动平均窗口大小 (1-30)
+                                      # 值越大图表越平滑，但响应越慢
+                                      # 推薦：10-15（約 1-2 秒平滑，有效抑制噪声）
+                                      # 针对0.5秒周期噪声：推荐15
+  
+  show_raw_data: false                # 同时显示原始数据曲线
+                                      # true: 显示原始+平滑两条曲线
+                                      # false: 只显示平滑曲线
+
+# ===== 架构说明 =====
 #
-# 方案 A：近距離高噪聲（預設，推薦）
-#   filter_window: 10, min_state_duration: 8, ema_alpha: 0.3
-#   state_lock_frames: 15, use_median_filter: true
-#   響應時間：1.0-1.2 秒，穩定性：高，誤報率：極低
+# 物理层（DrawerStateDetector）：
+#   - 基于原始物理数据直接判断
+#   - 只使用阈值比较 + 基本状态持续确认
+#   - 不做复杂的滤波处理
+#   - 保证数据的物理意义
 #
-# 方案 B：快速響應（中等噪聲）
-#   filter_window: 7, min_state_duration: 5, ema_alpha: 0.4
-#   state_lock_frames: 10, use_median_filter: true
-#   響應時間：0.6-0.8 秒，穩定性：中等，誤報率：5-10%
+# 显示层（Time Series Chart）：
+#   - 在时间序列图表上应用移动平均平滑
+#   - 提升视觉效果，降低噪声干扰
+#   - 不影响物理层的状态判断
+#   - 可选显示原始数据作为对比
+#
+# ===== 调优建议 =====
+#
+# 低噪声环境（标准距离）：
+#   min_state_duration: 3-5
+#   smoothing_window: 5-10
+#   响应时间：0.4-1.0 秒
+#
+# 高噪声环境（近距离或0.5秒周期噪声）：
+#   min_state_duration: 8-10
+#   smoothing_window: 15-20
+#   响应时间：1.0-2.0 秒
 #
 # 方案 C：超穩定（極端噪聲）
 #   filter_window: 15, min_state_duration: 10, ema_alpha: 0.2

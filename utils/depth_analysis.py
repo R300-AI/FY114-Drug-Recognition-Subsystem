@@ -27,53 +27,70 @@ class DepthAnalyzer:
         """
         將反射光強度轉換為相對深度指標
         
+        基於物理模型: 相對距離 ∝ 1 / √(反射光強度)
+        歸一化到 [0, 1] 範圍:
+        - 0.0 = 最近距離（intensity = 255，高反射，紅色）
+        - 1.0 = 最遠距離（intensity = 1，低反射，藍色）
+        
         Args:
             intensity_values: numpy array，8-bit 像素值（反射光強度）
             
         Returns:
-            相對深度指標（值越大表示距離越遠）
+            歸一化深度指標，範圍[0, 1]（值越大表示距離越遠）
         """
-        # 避免除以零
-        intensity_values = np.clip(intensity_values, 1, 255)
+        # 避免除以零，限制在有效範圍
+        intensity_values = np.clip(intensity_values, 1, 255).astype(np.float32)
         
-        # 根據公式：相對距離 ∝ 1 / √(反射光強度)
-        relative_depth = 1.0 / np.sqrt(intensity_values.astype(np.float32))
+        # 物理模型計算：depth ∝ 1/√intensity
+        raw_depth = 1.0 / np.sqrt(intensity_values)
         
-        return relative_depth
+        # 計算理論極限值（用於歸一化）
+        depth_at_max_intensity = 1.0 / np.sqrt(255.0)  # ≈ 0.0626（最近距離）
+        depth_at_min_intensity = 1.0 / np.sqrt(1.0)     # = 1.0（最遠距離）
+        
+        # 歸一化到 [0, 1]：將原始範圍 [0.0626, 1.0] 映射到 [0, 1]
+        normalized_depth = (raw_depth - depth_at_max_intensity) / \
+                           (depth_at_min_intensity - depth_at_max_intensity)
+        
+        # 確保在有效範圍內（防止浮點誤差）
+        normalized_depth = np.clip(normalized_depth, 0.0, 1.0)
+        
+        return normalized_depth
     
-    def calculate_depth_metrics(self, intensity_roi, use_transform=False):
+    def calculate_depth_metrics(self, intensity_roi):
         """
         計算深度指標
-        
+
+        核心指標：
+        - intensity_mean: ROI 平均強度值 (0-255)，高=近=閉合，低=遠=開啟
+        - relative_distance: 1/√intensity_mean，正比於相對距離，高=遠=開啟，低=近=閉合
+
         Args:
-            intensity_roi: numpy array，ROI 區域的像素值
-            use_transform: 是否使用深度轉換（根據物理特性）
-            
+            intensity_roi: numpy array，ROI 區域的像素值 (0-255)
+
         Returns:
             dict，包含各種深度統計指標
         """
-        if use_transform:
-            # 使用物理模型轉換
-            depth_values = self.intensity_to_relative_depth(intensity_roi)
-        else:
-            # 直接使用強度值（較簡單，但不符合物理特性）
-            depth_values = intensity_roi.astype(np.float32)
-        
+        intensity_mean = np.mean(intensity_roi)
+
+        # 相對距離指標：1/√intensity，正比於實際距離
+        # intensity 高(255) → relative_distance ≈ 0.063（近）
+        # intensity 低(1)   → relative_distance = 1.0（遠）
+        clipped = np.clip(intensity_mean, 1, 255)
+        relative_distance = 1.0 / np.sqrt(clipped)
+
         metrics = {
-            'mean': np.mean(depth_values),
-            'median': np.median(depth_values),
-            'std': np.std(depth_values),
-            'min': np.min(depth_values),
-            'max': np.max(depth_values),
-            'percentile_10': np.percentile(depth_values, 10),
-            'percentile_90': np.percentile(depth_values, 90),
-            'range': np.max(depth_values) - np.min(depth_values),
+            'mean': intensity_mean,            # 平均強度值 (0-255)
+            'relative_distance': relative_distance,  # 相對距離指標 (0.063-1.0)
+            'median': np.median(intensity_roi),
+            'std': np.std(intensity_roi),
+            'min': np.min(intensity_roi),
+            'max': np.max(intensity_roi),
+            'percentile_10': np.percentile(intensity_roi, 10),
+            'percentile_90': np.percentile(intensity_roi, 90),
+            'range': np.max(intensity_roi) - np.min(intensity_roi),
         }
-        
-        # 添加原始強度統計（用於參考）
-        metrics['intensity_mean'] = np.mean(intensity_roi)
-        metrics['intensity_median'] = np.median(intensity_roi)
-        
+
         return metrics
     
     def set_calibration_baseline(self, intensity_roi, distance=None):
@@ -189,123 +206,80 @@ class DataLogger:
 
 class DrawerStateDetector:
     """
-    抽屜狀態偵測器
-    使用多級濾波和狀態機來提高判斷穩定性，有效抑制噪聲
+    抽屜狀態偵測器（最簡化版本）
+    直接基於 intensity 判斷，不做複雜轉換
     """
     
-    def __init__(self, threshold_open, threshold_closed, 
-                 filter_window=10, min_state_duration=8,
-                 ema_alpha=0.3, use_median_filter=True,
-                 state_lock_frames=15):
+    def __init__(self, threshold_open, threshold_closed, min_state_duration=5):
         """
         初始化狀態偵測器
         
+        核心概念：直接使用 intensity_mean (0-255)
+        - intensity 越高 → 距離越近 → 抽屜關閉
+        - intensity 越低 → 距離越遠 → 抽屜打開
+        
         Args:
-            threshold_open: 開啟狀態閾值（depth_metric > 此值為開啟）
-            threshold_closed: 閉合狀態閾值（depth_metric < 此值為閉合）
-            filter_window: 移動平均/中值濾波窗口大小（建議 8-15）
-            min_state_duration: 狀態變更前需要持續的最小幀數（建議 6-10）
-            ema_alpha: 指數移動平均的平滑係數（0.1-0.5，越小越平滑）
-            use_median_filter: 是否使用中值濾波去除尖峰噪聲
-            state_lock_frames: 狀態變更後的鎖定幀數（防止快速回跳）
+            threshold_closed: 閉合狀態閾值 (intensity > 此值為閉合) - 應為較高值（如150）
+            threshold_open: 開啟狀態閾值 (intensity < 此值為開啟) - 應為較低值（妀80）
+            min_state_duration: 狀態變更前需要持續的最小幀數（防止瞬間抖動）
+        
+        閾值邏輯：threshold_closed > threshold_open
         """
+        # 驗證閾值順序
+        if threshold_closed <= threshold_open:
+            raise ValueError(
+                f"閾值順序錯誤: threshold_closed({threshold_closed}) 必須大於 "
+                f"threshold_open({threshold_open})。\n"
+                f"物理意義: closed=高intensity(近距離), open=低intensity(遠距離)"
+            )
+        
         self.threshold_open = threshold_open
         self.threshold_closed = threshold_closed
-        self.filter_window = filter_window
         self.min_state_duration = min_state_duration
-        self.ema_alpha = ema_alpha
-        self.use_median_filter = use_median_filter
-        self.state_lock_frames = state_lock_frames
-        
-        # 數據歷史（使用 deque 提高效率）
-        self.raw_history = deque(maxlen=filter_window)
-        self.filtered_history = deque(maxlen=filter_window)
         
         # 狀態追蹤
         self.current_state = "未知"
         self.state_counter = 0
         self.pending_state = None
-        self.state_lock_counter = 0  # 狀態鎖定計數器
         
-        # EMA 狀態
-        self.ema_value = None
-        
-    def update(self, depth_value):
+    def update(self, intensity_value):
         """
-        更新狀態（多級濾波 + 增強狀態穩定）
+        更新狀態（基於 intensity 值）
         
         Args:
-            depth_value: 當前深度指標值
+            intensity_value: 當前 intensity 平均值 (0-255)
             
         Returns:
             str: 當前抽屜狀態
         """
-        # 第一級：原始數據記錄
-        self.raw_history.append(depth_value)
-        
-        # 第二級：中值濾波（去除尖峰噪聲）
-        if self.use_median_filter and len(self.raw_history) >= 3:
-            # 使用最近 3-5 個值做中值濾波
-            recent_values = list(self.raw_history)[-min(5, len(self.raw_history)):]
-            median_filtered = np.median(recent_values)
-        else:
-            median_filtered = depth_value
-        
-        # 第三級：指數移動平均（EMA，平滑長期趨勢）
-        if self.ema_value is None:
-            self.ema_value = median_filtered
-        else:
-            self.ema_value = (self.ema_alpha * median_filtered + 
-                             (1 - self.ema_alpha) * self.ema_value)
-        
-        # 第四級：移動平均（最終平滑）
-        self.filtered_history.append(self.ema_value)
-        filtered_value = np.mean(list(self.filtered_history))
-        
-        # 狀態鎖定機制（剛變更狀態後鎖定一段時間）
-        if self.state_lock_counter > 0:
-            self.state_lock_counter -= 1
-            return self.current_state  # 鎖定期間不改變狀態
-        
         # 根據閾值判斷新狀態
-        # 物理原理：抽屉開啟（遠）→ 強度低 → depth_metric 高
-        #           抽屉閉合（近）→ 強度高 → depth_metric 低
-        if filtered_value > self.threshold_open:
-            new_state = "完全開啟"  # 高值，距離遠
-        elif filtered_value > self.threshold_closed:
-            new_state = "閉合中"  # 中間值
+        # intensity 高 = 近距離 = 抽屜關閉
+        # intensity 低 = 遠距離 = 抽屜打開
+        if intensity_value > self.threshold_closed:
+            new_state = "完全閉合"
+        elif intensity_value > self.threshold_open:
+            new_state = "閉合中"
         else:
-            new_state = "完全閉合"  # 低值，距離近
+            new_state = "完全開啟"
         
-        # 增強的狀態變更邏輯（需要持續一定幀數才確認變更）
+        # 狀態變更邏輯（需要持續一定幀數才確認變更）
         if new_state != self.current_state:
             if self.pending_state == new_state:
                 self.state_counter += 1
                 if self.state_counter >= self.min_state_duration:
-                    # 確認狀態變更
                     old_state = self.current_state
                     self.current_state = new_state
                     self.state_counter = 0
                     self.pending_state = None
-                    # 啟動狀態鎖定（防止快速回跳）
-                    self.state_lock_counter = self.state_lock_frames
-                    print(f"[狀態變更] {old_state} → {new_state} (濾波值: {filtered_value:.4f})")
+                    print(f"[狀態變更] {old_state} -> {new_state} (intensity: {intensity_value:.1f})")
             else:
-                # 新的待處理狀態
                 self.pending_state = new_state
                 self.state_counter = 1
         else:
-            # 狀態維持不變，重置待處理狀態
             self.pending_state = None
             self.state_counter = 0
         
         return self.current_state
-    
-    def get_filtered_value(self):
-        """獲取當前濾波後的值（用於調試）"""
-        if len(self.filtered_history) > 0:
-            return np.mean(list(self.filtered_history))
-        return None
     
     def update_thresholds(self, threshold_open, threshold_closed):
         """動態更新閾值"""
@@ -314,13 +288,9 @@ class DrawerStateDetector:
     
     def reset(self):
         """重置狀態偵測器"""
-        self.raw_history.clear()
-        self.filtered_history.clear()
         self.current_state = "未知"
         self.state_counter = 0
         self.pending_state = None
-        self.state_lock_counter = 0
-        self.ema_value = None
 
 
 # 使用範例
