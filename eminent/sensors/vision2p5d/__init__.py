@@ -4,7 +4,7 @@ Provides OpenCV-style object-oriented interface for sensor configuration
 """
 
 from typing import Tuple, Optional
-from collections import deque
+from pathlib import Path
 import numpy as np
 import cv2
 import logging
@@ -19,9 +19,13 @@ INIT_SLEEP_TIME = 0.2
 RELEASE_SLEEP_TIME = 0.2
 
 # Warmup constants
-WARMUP_IDLE_THRESHOLD = 300  # seconds (5 minutes)
-WARMUP_DURATION = 10         # seconds
-READ_LOG_MAXLEN = 100        # keep last N read timestamps
+# Every 30s of idle time adds 1s of warmup, up to 10s max
+# (e.g. 30s idle → 1s warmup, 150s → 5s, ≥300s → 10s)
+WARMUP_STEP_SECONDS = 30   # idle seconds per warmup second
+WARMUP_MAX_SECONDS  = 10   # maximum warmup duration
+
+# Timestamp log file (one ISO timestamp per line, reset on each startup)
+_TIMESTAMP_LOG_PATH = Path(__file__).parent / "read_timestamps.log"
 
 
 class MN96100CConfig:
@@ -97,8 +101,9 @@ class VideoCapture:
         self.usb_comm = None
         self._is_opened = False
 
-        # Read timestamp log: stores time.time() of each successful read (max 100)
-        self._read_timestamps: deque = deque(maxlen=READ_LOG_MAXLEN)
+        # Last successful read time, loaded from previous session's log file
+        self._last_read_time: Optional[float] = self._load_last_timestamp()
+        self._setup_timestamp_logger()
 
         # Store device identifiers for later use
         self.vid = vid
@@ -143,19 +148,66 @@ class VideoCapture:
                 self._logger.error(f"Failed to send {name} command: {e}")
                 raise
         
+    def _load_last_timestamp(self) -> Optional[float]:
+        """
+        Read the last line of the previous session's timestamp log to get the
+        last successful read time, then reset the log file for the new session.
+        Returns the timestamp as float (Unix time), or None if unavailable.
+        """
+        last_time = None
+        try:
+            if _TIMESTAMP_LOG_PATH.exists():
+                lines = _TIMESTAMP_LOG_PATH.read_text().splitlines()
+                for line in reversed(lines):
+                    line = line.strip()
+                    if line:
+                        last_time = float(line)
+                        break
+        except Exception as e:
+            self._logger.warning(f"Could not read timestamp log: {e}")
+        finally:
+            # Always reset the log file so it doesn't grow unbounded
+            try:
+                _TIMESTAMP_LOG_PATH.write_text("")
+            except Exception as e:
+                self._logger.warning(f"Could not reset timestamp log: {e}")
+        return last_time
+
+    def _setup_timestamp_logger(self):
+        """Set up a dedicated file logger that appends one Unix timestamp per read."""
+        self._ts_logger = logging.getLogger(f"{__name__}.timestamps")
+        self._ts_logger.setLevel(logging.DEBUG)
+        self._ts_logger.propagate = False  # don't bubble up to root logger
+
+        if not self._ts_logger.handlers:
+            handler = logging.FileHandler(_TIMESTAMP_LOG_PATH, mode='a', encoding='utf-8')
+            handler.setFormatter(logging.Formatter('%(message)s'))
+            self._ts_logger.addHandler(handler)
+
+    def _warmup_duration(self) -> int:
+        """
+        Compute required warmup duration based on idle time.
+
+        Staircase: every WARMUP_STEP_SECONDS of idle = 1s warmup, capped at WARMUP_MAX_SECONDS.
+        Returns 0 if no warmup needed.
+        """
+        if self._last_read_time is None:
+            return 0
+        idle = time.time() - self._last_read_time
+        return min(int(idle // WARMUP_STEP_SECONDS), WARMUP_MAX_SECONDS)
+
     def _needs_warmup(self) -> bool:
-        """Return True if idle time since last successful read exceeds WARMUP_IDLE_THRESHOLD."""
-        if not self._read_timestamps:
-            return False
-        idle = time.time() - self._read_timestamps[-1]
-        return idle > WARMUP_IDLE_THRESHOLD
+        """Return True if computed warmup duration is at least 1 second."""
+        return self._warmup_duration() > 0
 
     def _run_warmup(self):
-        """Stream frames for WARMUP_DURATION seconds without returning data (camera warm-up)."""
+        """Stream frames for the computed warmup duration without returning data."""
+        duration = self._warmup_duration()
+        idle = time.time() - self._last_read_time
         self._logger.info(
-            f"Camera idle for >{WARMUP_IDLE_THRESHOLD}s — running {WARMUP_DURATION}s warmup..."
+            f"Camera idle for {idle:.0f}s — running {duration}s warmup..."
         )
-        deadline = time.time() + WARMUP_DURATION
+        deadline = time.time() + duration
         while time.time() < deadline:
             try:
                 self.usb_comm.get_image()
@@ -191,7 +243,8 @@ class VideoCapture:
 
             result = self._process_raw_data(raw_data)
             if result[0]:  # success
-                self._read_timestamps.append(time.time())
+                self._last_read_time = time.time()
+                self._ts_logger.debug(str(self._last_read_time))
             return result
 
         except Exception as e:

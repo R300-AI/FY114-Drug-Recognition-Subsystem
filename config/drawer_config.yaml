@@ -11,8 +11,8 @@ roi:
   x2: 120
   y2: 120
 thresholds:
-  open: 80
-  closed: 150
+  open: 19
+  closed: 117
 analysis:
   min_state_duration: 5
   history_size: 500
