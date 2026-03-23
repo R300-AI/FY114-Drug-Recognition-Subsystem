@@ -10,9 +10,9 @@ Gallery（特徵庫）與 YOLO 模型由 [FY115-Drug-Visual-AI-Search-Platform](
 ## 操作流程
 
 ```
-1. 系統啟動 → 黑畫面（待分析狀態）
+1. 系統啟動 → 黑畫面（待分析狀態，藥盤可能在任意位置）
 
-2. 將藥盤放置於相機下方，推入抽屜
+2. 抽出藥盤，將藥錠放置於藥盤上，在將藥盤推入抽屜的相機下方
 
 3. 2.5D 感測器連續判定抽屜閉合 → 自動觸發分析：
    ├── 拍攝一張靜態照片
@@ -173,22 +173,6 @@ crontab -e
 ```
 
 > `startup.sh` 應依序啟動 `api.py`（背景）再啟動 `run.py`。
-
----
-
-## 部署 Gallery 與模型
-
-從 FY115 工作站生成後，複製至此目錄（`api.py` 讀取這些路徑）：
-
-```bash
-# 透過 SCP 從工作站推送
-scp -r path/to/FY115/src/gallery pi@<rpi_ip>:~/FY114-Drug-Recognition-Subsystem/src/
-scp path/to/FY115/src/best.pt   pi@<rpi_ip>:~/FY114-Drug-Recognition-Subsystem/src/
-
-# 或在 Pi 上執行 git pull（best.pt 需另外處理，見 .gitignore）
-```
-
-部署後重啟 `api.py` 使新模型生效。
 
 ---
 

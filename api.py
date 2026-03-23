@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 from flask import Flask, jsonify, request
 
-from run import YOLODetector, ResNet34Encoder, Top1Matcher
+from utils.models import YOLODetector, ResNet34Encoder, Top1Matcher
 from utils.gallery import Gallery
 
 # ── 固定路徑（Docker 內掛載位置）──
