@@ -18,7 +18,7 @@ import re
 import time
 import threading
 import tkinter as tk
-from collections import deque
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -42,8 +42,7 @@ from .types import Detection, MatchResult
 # 常數
 # ============================================================
 
-RECORDS_DIR    = Path("records")
-DRAWER_LOG     = Path("logs/drawer_state.log")
+RECORDS_DIR = Path("records")
 
 # 每種藥品的配色（邊框色、背景色、YOLO覆蓋BGR）
 DRUG_COLORS = [
@@ -154,16 +153,11 @@ class App:
 
         # --- 抽屜感測器 ---
         self._drawer_cap              = None
-        self._drawer_analyzer         = None
-        self._drawer_detector         = None
-        self._drawer_cfg              = {}
-        self._drawer_history          = deque(maxlen=500)
         self._drawer_running          = False
         self._drawer_thread           = None
-        self._drawer_consecutive_closed = 0   # 連續「完全閉合」次數
-        self._drawer_triggered        = False  # True = 已觸發分析，等待開啟後才可再觸發
-        self._drawer_close_threshold  = 5      # 預設值，init 時從 config 覆寫
-        self._drawer_logger           = None   # 狀態 log
+        self._drawer_consecutive_closed = 0
+        self._drawer_triggered        = False
+        self._drawer_close_threshold  = 5      # 從 config 覆寫
 
         # --- 視窗 ---
         self.root.title("AI藥品輔助辨識")
@@ -257,11 +251,9 @@ class App:
 
         try:
             import yaml
-            from utils.depth_analysis import DepthAnalyzer, DrawerStateDetector
             from eminent.sensors.vision2p5d import VideoCapture, MN96100CConfig
 
             cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-            self._drawer_cfg = cfg
             self._drawer_close_threshold = cfg['analysis'].get('min_state_duration', 5)
 
             self._drawer_cap = VideoCapture(
@@ -273,32 +265,16 @@ class App:
                                     cfg['camera']['led_current']),
                 exposure_setting=getattr(MN96100CConfig.ExposureSetting,
                                          cfg['camera'].get('exposure_setting', 'DEFAULT')),
-            )
-            if not self._drawer_cap.isOpened():
-                raise RuntimeError("MN96100C not opened")
-
-            # 暖機由 VideoCapture.read() 內部自動處理（eminent），
-            # 此處僅在 UI 顯示等待提示
-            self.badge_label.config(text="感測器啟動中")
-            self.root.update()
-
-            self._drawer_analyzer = DepthAnalyzer()
-            self._drawer_detector = DrawerStateDetector(
                 threshold_open=cfg['thresholds']['open'],
                 threshold_closed=cfg['thresholds']['closed'],
                 min_state_duration=cfg['analysis']['min_state_duration'],
+                roi=cfg.get('roi', {}),
+                smoothing_window=cfg['display']['smoothing_window'],
+                enable_smoothing=cfg['display'].get('enable_smoothing', True),
+                history_size=cfg['analysis'].get('history_size', 500),
             )
-
-            # ── 建立 / 重製 drawer state log ──
-            DRAWER_LOG.parent.mkdir(parents=True, exist_ok=True)
-            self._drawer_logger = logging.getLogger("drawer.state")
-            self._drawer_logger.setLevel(logging.DEBUG)
-            self._drawer_logger.propagate = False
-            self._drawer_logger.handlers.clear()
-            handler = logging.FileHandler(DRAWER_LOG, mode='w', encoding='utf-8')
-            handler.setFormatter(logging.Formatter('%(asctime)s  %(message)s',
-                                                    datefmt='%Y-%m-%d %H:%M:%S'))
-            self._drawer_logger.addHandler(handler)
+            if not self._drawer_cap.isOpened():
+                raise RuntimeError("MN96100C not opened")
 
             self._start_drawer_monitoring()
             print("[drawer] MN96100C ready, monitoring started")
@@ -356,58 +332,21 @@ class App:
                 continue
 
             consecutive_failures = 0
+            state = self._drawer_cap.state
 
-            try:
-                gray = (cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                        if frame.ndim == 3 else frame)
-
-                roi = self._drawer_cfg.get('roi', {})
-                if roi.get('enabled', False):
-                    gray = gray[roi['y1']:roi['y2'], roi['x1']:roi['x2']]
-
-                metrics = self._drawer_analyzer.calculate_depth_metrics(gray)
-                self._drawer_history.append(metrics['mean'])
-
-                # MAX 平滑（與 drawer_monitor 一致）
-                n = self._drawer_cfg['display']['smoothing_window']
-                enable = self._drawer_cfg['display'].get('enable_smoothing', True)
-                if enable:
-                    recent = list(self._drawer_history)[-n:]
-                    smoothed = max(recent)
-                else:
-                    smoothed = metrics['mean']
-
-                state = self._drawer_detector.update(smoothed)
-
-                # 每幀都串流輸出（terminal + file）
-                log_line = f"[drawer] state={state:<6}  intensity={smoothed:6.1f}"
-                print(log_line, flush=True)
-                if self._drawer_logger:
-                    open_th   = self._drawer_detector.threshold_open
-                    closed_th = self._drawer_detector.threshold_closed
-                    self._drawer_logger.info(
-                        f"state={state}  intensity={smoothed:.1f}"
-                        f"  threshold_open={open_th}  threshold_closed={closed_th}"
-                    )
-
-                if not self._drawer_triggered:
-                    # 等待連續閉合 → 觸發分析
-                    if state == "完全閉合":
-                        self._drawer_consecutive_closed += 1
-                        if self._drawer_consecutive_closed >= self._drawer_close_threshold:
-                            self._drawer_triggered = True
-                            self._drawer_consecutive_closed = 0
-                            self.root.after(0, self._on_drawer_closed)
-                    else:
+            if not self._drawer_triggered:
+                if state == "完全閉合":
+                    self._drawer_consecutive_closed += 1
+                    if self._drawer_consecutive_closed >= self._drawer_close_threshold:
+                        self._drawer_triggered = True
                         self._drawer_consecutive_closed = 0
+                        self.root.after(0, self._on_drawer_closed)
                 else:
-                    # 已觸發，等待抽屜完全開啟後才解鎖
-                    if state == "完全開啟":
-                        self._drawer_triggered = False
-                        self._drawer_consecutive_closed = 0
-
-            except Exception as e:
-                print(f"[drawer] Loop error: {e}")
+                    self._drawer_consecutive_closed = 0
+            else:
+                if state == "完全開啟":
+                    self._drawer_triggered = False
+                    self._drawer_consecutive_closed = 0
 
     def _on_drawer_closed(self):
         """抽屜閉合事件（主執行緒）— 直接呼叫分析，UI 在分析期間暫停回應"""
