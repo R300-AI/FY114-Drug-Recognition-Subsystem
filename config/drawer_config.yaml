@@ -11,12 +11,12 @@ roi:
   x2: 120
   y2: 120
 thresholds:
-  open: 19
-  closed: 117
+  open: 25
+  closed: 80
 analysis:
   min_state_duration: 5
   history_size: 500
 display:
-  smoothing_window: 36
+  smoothing_window: 16
   show_raw_data: true
   enable_smoothing: true
