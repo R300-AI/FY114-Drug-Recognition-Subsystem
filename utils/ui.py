@@ -210,7 +210,7 @@ class App:
             self.led_pixels = None
 
     # --------------------------------------------------------
-    # 相機初始化（不啟動串流）
+    # 相機初始化
     # --------------------------------------------------------
 
     def _init_camera(self):
@@ -221,9 +221,15 @@ class App:
             return
         try:
             from picamera2 import Picamera2
-            self._camera = Picamera2()
+            cam = Picamera2()
+            config = cam.create_still_configuration(
+                main={"size": (1296, 972), "format": "BGR888"}
+            )
+            cam.configure(config)
+            cam.start()
+            print("[camera] Picamera2 started")
+            self._camera = cam
             self._is_picamera = True
-            print("[camera] Picamera2 ready (not started)")
         except ImportError:
             cap = cv2.VideoCapture(0)
             if cap.isOpened():
@@ -381,7 +387,7 @@ class App:
         self._on_analyse()
 
     def _capture_single_frame(self) -> np.ndarray | None:
-        """短暫啟動相機，拍攝一幀後立即停止。回傳 BGR (H,W,3) 或 None"""
+        """拍攝一幀。Picamera2 在 init 時已啟動並持續運行，直接 capture_array()。回傳 BGR (H,W,3) 或 None"""
         if self._debug:
             sample_path = Path("src/sample/sample.jpg")
             if sample_path.exists():
@@ -395,14 +401,7 @@ class App:
             return None
         try:
             if self._is_picamera:
-                config = self._camera.create_still_configuration(
-                    main={"size": (1296, 972), "format": "BGR888"}
-                )
-                self._camera.configure(config)
-                self._camera.start()
-                time.sleep(0.5)           # 暖機
                 frame = self._camera.capture_array()
-                self._camera.stop()
                 if frame is None:
                     return None
                 # BGR888 → BGR
@@ -1344,6 +1343,7 @@ class App:
         if self._camera:
             try:
                 if self._is_picamera:
+                    self._camera.stop()
                     self._camera.close()
                 else:
                     self._camera.release()
