@@ -758,20 +758,28 @@ class App:
 
         return detections, results
 
+    def _set_status(self, text: str):
+        """更新 badge 狀態文字並強制重繪（主執行緒阻塞期間也能即時顯示）"""
+        self.badge_label.config(text=text)
+        self.root.update_idletasks()
+
     def _on_analyse(self):
         """抽屜閉合觸發：拍照 → 呼叫推論 API → 更新 UI（全程主執行緒）"""
         if self._is_analysed:
             return   # 正在 REVIEWING 中，忽略重複觸發
 
+        self._set_status("拍攝中...")
         print("[analyse] Capturing frame...")
         frame = self._capture_single_frame()
         if frame is None:
             print("[analyse] Capture failed")
+            self._set_status("待分析")
             self._show_info_modal("提示", "相機拍攝失敗，請確認相機連接狀態。")
             return
 
         self._captured_image = frame.copy()
 
+        self._set_status("辨識中...")
         print("[analyse] Running detection...")
         try:
             if self._debug:
@@ -781,11 +789,13 @@ class App:
                 detections, results = self._call_api(frame)
         except requests.exceptions.ConnectionError:
             print("[analyse] API connection failed")
+            self._set_status("待分析")
             self._show_info_modal(
                 "連線錯誤", f"無法連線至推論伺服器 {self._api_url}\n請確認 api.py 已啟動。")
             return
         except Exception as e:
             print(f"[analyse] Error: {e}")
+            self._set_status("待分析")
             self._show_info_modal("辨識錯誤", f"推論過程發生錯誤：{e}")
             return
 

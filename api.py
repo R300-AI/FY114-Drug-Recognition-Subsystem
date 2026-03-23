@@ -77,6 +77,9 @@ def health():
 
 @app.route("/analyse", methods=["POST"])
 def analyse():
+    import time
+    t0 = time.time()
+
     if "image" not in request.files:
         return jsonify({"error": "No image field"}), 400
 
@@ -87,15 +90,27 @@ def analyse():
     if frame is None:
         return jsonify({"error": "Cannot decode image"}), 400
 
+    print(f"[api] image received  shape={frame.shape}", flush=True)
+
+    print("[api] running YOLO detection...", flush=True)
+    detections = list(_detector(frame))
+    print(f"[api] YOLO done  pills={len(detections)}  "
+          f"({time.time()-t0:.2f}s)", flush=True)
+
     pills = []
-    for det in _detector(frame):
+    for i, det in enumerate(detections):
         x1, y1, x2, y2 = det.bbox
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             continue
 
+        print(f"[api]   [{i+1}/{len(detections)}] encoding+matching  "
+              f"conf={det.confidence:.2f}  bbox={det.bbox}", flush=True)
         result = _matcher(_encoder(crop))
         lic    = result.license_number if result else ""
+        name   = result.name if result else "未識別"
+        score  = round(float(result.score), 4) if result else 0.0
+        print(f"[api]   [{i+1}/{len(detections)}] → {lic}  {name}  score={score}", flush=True)
 
         pills.append({
             "bbox":           list(det.bbox),
@@ -103,12 +118,13 @@ def analyse():
             "confidence":     round(float(det.confidence), 4),
             "class_id":       int(det.class_id),
             "license_number": lic,
-            "name":           result.name  if result else "未識別",
+            "name":           name,
             "side":           result.side  if result else 0,
-            "score":          round(float(result.score), 4) if result else 0.0,
+            "score":          score,
             "drug_info":      _drug_db.get(lic, {}),
         })
 
+    print(f"[api] done  total={time.time()-t0:.2f}s  matched={len(pills)}", flush=True)
     return jsonify({"status": "ok", "pills": pills})
 
 
