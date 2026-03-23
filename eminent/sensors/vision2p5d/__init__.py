@@ -121,7 +121,7 @@ class VideoCapture:
             raise
 
     def _initialize_device(self, exposure_setting, frame_rate, led_current, tx_output):
-        """Initialize and configure the USB device."""
+        """Initialize and configure the USB device, then run warmup before returning."""
         self.usb_comm = USBDeviceComm(vid=self.vid, pid=self.pid)
         self.usb_comm.connect()
 
@@ -133,6 +133,15 @@ class VideoCapture:
         time.sleep(INIT_SLEEP_TIME)
 
         self._is_opened = True
+
+        # 暖機（blocking）— 完成後才回傳，讓呼叫端 UI 在暖機結束後才顯示
+        if self._needs_warmup():
+            self._run_warmup()
+        else:
+            print("[sensor] 暖機跳過（距上次讀取時間短）", flush=True)
+        # 標記暖機完成，避免 read() 重複觸發
+        self._last_read_time = time.time()
+
         self._logger.info("VideoCapture initialized successfully")
     
     def _send_configuration_commands(self, exposure_setting, frame_rate, led_current, tx_output):

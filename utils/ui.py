@@ -174,10 +174,13 @@ class App:
         else:
             self.root.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}")
 
+        # 暖機完成前隱藏視窗，避免使用者看到未就緒的 UI
+        self.root.withdraw()
+
         # --- 建 UI ---
         self._build_ui()
 
-        # --- 初始化（不啟動串流）---
+        # --- 初始化（含感測器暖機，blocking）---
         self._init_camera()
         self._init_drawer_sensor()
         self._update_tray_id()
@@ -185,6 +188,9 @@ class App:
 
         # --- 關閉事件 ---
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # 所有初始化完成 → 顯示視窗
+        self.root.deiconify()
 
     # --------------------------------------------------------
     # LED
