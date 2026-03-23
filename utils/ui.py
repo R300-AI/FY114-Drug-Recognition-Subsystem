@@ -736,21 +736,17 @@ class App:
             results = self._debug_fake_results(len(detections))
         else:
             detections = self.detector(frame)
-            # 編碼 & 比對（BaseEncoder.__call__ 自動 L2 正規化，BaseMatcher.__call__ 自動空庫防護）
+            # TODO: 暫時 mock — 每顆藥錠固定回傳 00008，移除此區塊後換回真實 encoder/matcher
+            import random as _random
             results: list[MatchResult | None] = []
-            for det in detections:
-                x1, y1, x2, y2 = det.bbox
-                crop = frame[y1:y2, x1:x2]
-                if crop.size == 0:
-                    results.append(None)
-                    continue
-                try:
-                    feat = self.encoder(crop)
-                    match = self.matcher(feat)
-                    results.append(match)
-                except Exception as e:
-                    print(f"[analyse] encode/match error: {e}")
-                    results.append(None)
+            for _ in detections:
+                time.sleep(_random.uniform(0.2, 0.3))
+                results.append(MatchResult(
+                    license_number="00008",
+                    name="Mock Drug 00008",
+                    side=0,
+                    score=1.0,
+                ))
 
         if not detections:
             print("[analyse] No pills detected")
