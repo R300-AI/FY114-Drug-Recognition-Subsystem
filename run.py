@@ -200,18 +200,13 @@ def create_components(
 
     替換模型時，修改此函式即可，無需更動 utils/ui.py。
     """
-    errors = []
-
     if not Path(model_path).exists():
-        errors.append(f"找不到模型檔案：{model_path}")
+        raise FileNotFoundError(f"找不到模型檔案：{model_path}")
 
     gallery = Gallery(gallery_path)
     gallery.load()
     if gallery.size == 0:
-        errors.append(f"Gallery 為空或載入失敗：{gallery_path}")
-
-    if errors:
-        raise FileNotFoundError("\n".join(errors))
+        print(f"[init] Warning: Gallery 為空或載入失敗：{gallery_path}")
 
     encoder  = ResNet34Encoder()
     matcher  = Top1Matcher(gallery)
