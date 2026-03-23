@@ -227,7 +227,11 @@ class App:
             )
             cam.configure(config)
             cam.start()
-            print("[camera] Picamera2 started")
+            # Discard initial frames so AEC/AWB can converge before first real capture
+            print("[camera] AEC warmup...", flush=True)
+            for _ in range(20):
+                cam.capture_array()
+            print("[camera] Picamera2 ready", flush=True)
             self._camera = cam
             self._is_picamera = True
         except ImportError:
