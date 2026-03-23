@@ -2,7 +2,7 @@
 抽屜閉合監測應用程式 - 生產版本
 
 特性:
-- intensity (0-255) + SMA(N) 統一平滑架構
+- intensity (0-255) + MAX(N) 統一平滑架構
 - 所有配置從 YAML 讀取,無硬編碼
 - 視窗大小: 1024x600
 - Tab 切換: 數據串流頁面 和 參數配置頁面
@@ -31,48 +31,42 @@ from eminent.sensors.vision2p5d import VideoCapture, MN96100CConfig
 from utils.depth_analysis import DepthAnalyzer, DrawerStateDetector
 
 
-def moving_average(data, window):
+def moving_maximum(data, window):
     """
-    移动平均（自适应窗口）
-    
-    样本不足时：使用实际样本数作为分母
-    样本充足时：使用固定window size作为分母
-    
+    移动最大值（自适应窗口）
+
+    取过去 N 个样本中的最大值作为该点的值。
+    样本不足时：从索引0到当前点取最大值
+    样本充足时：从索引i-window+1到当前点取最大值
+
     例如 window=10:
-      i=0: avg(data[0:1]) = data[0]/1
-      i=5: avg(data[0:6]) = sum(data[0:6])/6
-      i=9: avg(data[0:10]) = sum(data[0:10])/10  ← 第一次达到完整窗口
-      i=10+: avg(data[i-9:i+1]) = sum(...)/10    ← 始终使用10个样本
-    
+      i=0: max(data[0:1])
+      i=5: max(data[0:6])
+      i=9: max(data[0:10])  ← 第一次达到完整窗口
+      i=10+: max(data[i-9:i+1])  ← 始终使用10个样本
+
     Args:
         data: 输入数据序列（deque或list）
         window: 窗口大小
-    
+
     Returns:
-        list: 平滑后的数据序列
+        list: 最大值滤波后的数据序列
     """
     if window < 1:
         window = 1  # 最小窗口为1（不平滑）
-    
+
     n = len(data)
     if n == 0:
         return []
-    
+
     smoothed = []
     data_list = list(data)  # 转换为list以支持索引
-    
+
     for i in range(n):
-        # 样本不足时：从索引0开始
-        # 样本充足时：从索引i-window+1开始
         start = max(0, i - window + 1)
-        
-        # 提取窗口数据：[start, i+1)
         window_data = data_list[start:i + 1]
-        
-        # 分母是实际样本数（样本不足时<window，充足时=window）
-        avg = sum(window_data) / len(window_data)
-        smoothed.append(avg)
-    
+        smoothed.append(max(window_data))
+
     return smoothed
 
 
@@ -408,11 +402,11 @@ class DrawerMonitorApp:
         # 啟用 SMA 平滑開關
         self.enable_smoothing_var = tk.BooleanVar(
             value=self.config['display'].get('enable_smoothing', True))
-        ttk.Checkbutton(display_frame, text="啟用 SMA (Simple Moving Average) 平滑",
+        ttk.Checkbutton(display_frame, text="啟用 MAX (Moving Maximum) 平滑",
                         variable=self.enable_smoothing_var
                         ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=3)
 
-        ttk.Label(display_frame, text="SMA 視窗大小 N (1-30):", font=('Arial', 9)
+        ttk.Label(display_frame, text="MAX 視窗大小 N (1-30):", font=('Arial', 9)
                   ).grid(row=1, column=0, sticky=tk.W, pady=3)
         self.smoothing_window_var = tk.IntVar(
             value=self.config['display']['smoothing_window'])
@@ -427,7 +421,7 @@ class DrawerMonitorApp:
                         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=3)
         
         ttk.Label(display_frame,
-                  text="💡 SMA(N)：取最近 N 幀算術平均（等同股票 N 日均線）\n   同時作用於圖表顯示與狀態判斷",
+                  text="💡 MAX(N)：取最近 N 幀的最大值\n   同時作用於圖表顯示與狀態判斷",
                   font=('Arial', 8), foreground='#0066cc', justify=tk.LEFT
                   ).grid(row=3, column=0, columnspan=2, pady=5)
         
@@ -616,21 +610,21 @@ class DrawerMonitorApp:
                 depth_metric = metrics['mean']            # intensity_mean (0-255) 原始值
                 relative_dist = metrics['relative_distance']  # 1/√intensity，正比於相對距離
 
-                # 先存入 deque，再取 SMA 用於狀態判斷
+                # 先存入 deque，再取 MAX 用於狀態判斷
                 self.time_data.append(current_time)
                 self.depth_metric_data.append(depth_metric)
                 self.relative_dist_data.append(relative_dist)
 
-                # SMA 平滑後的值用於狀態判斷（與圖表顯示使用相同演算法）
-                sma_n = self.config['display']['smoothing_window']
-                enable_sma = self.config['display'].get('enable_smoothing', True)
-                if enable_sma:
-                    recent = list(self.depth_metric_data)[-sma_n:]
-                    smoothed_for_state = sum(recent) / len(recent)
+                # MAX 平滑後的值用於狀態判斷（與圖表顯示使用相同演算法）
+                max_n = self.config['display']['smoothing_window']
+                enable_smoothing = self.config['display'].get('enable_smoothing', True)
+                if enable_smoothing:
+                    recent = list(self.depth_metric_data)[-max_n:]
+                    smoothed_for_state = max(recent)
                 else:
                     smoothed_for_state = depth_metric
 
-                # 狀態判斷（使用 SMA 平滑後的 intensity）
+                # 狀態判斷（使用 MAX 平滑後的 intensity）
                 if self.state_detector:
                     drawer_status = self.state_detector.update(smoothed_for_state)
                 else:
@@ -690,11 +684,11 @@ class DrawerMonitorApp:
         self._ui_update_pending = False
 
     def update_chart(self):
-        """更新圖表（SMA 平滑顯示，與狀態判斷使用相同演算法）"""
+        """更新圖表（MAX 平滑顯示，與狀態判斷使用相同演算法）"""
         if len(self.time_data) < 2:
             return
         
-        # 上圖：SMA 平滑後的 intensity (0-255)
+        # 上圖：MAX 平滑後的 intensity (0-255)
         self.ax1.clear()
         
         # 获取平滑参数
@@ -706,22 +700,22 @@ class DrawerMonitorApp:
         raw_data = list(self.depth_metric_data)
         time_data = list(self.time_data)
         
-        # 根據開關決定是否套用 SMA
+        # 根據開關決定是否套用 MAX
         if enable_smoothing:
-            smoothed_data = moving_average(raw_data, smoothing_window)
+            smoothed_data = moving_maximum(raw_data, smoothing_window)
             display_data = smoothed_data
-            label_suffix = f' SMA(N={smoothing_window})'
+            label_suffix = f' MAX(N={smoothing_window})'
         else:
             display_data = raw_data
             label_suffix = ' (Raw)'
 
         # 繪製數據
         if show_raw and enable_smoothing:
-            # 同時顯示原始數據和 SMA 平滑數據
+            # 同時顯示原始數據和 MAX 平滑數據
             self.ax1.plot(time_data, raw_data,
                           'b-', linewidth=1, alpha=0.3, label='Raw Intensity')
             self.ax1.plot(time_data, display_data,
-                          'b-', linewidth=2, label=f'SMA(N={smoothing_window})')
+                          'b-', linewidth=2, label=f'MAX(N={smoothing_window})')
         else:
             # 只顯示主數據
             self.ax1.plot(time_data, display_data,
@@ -742,7 +736,7 @@ class DrawerMonitorApp:
         self.ax1.set_ylabel('Intensity (0-255)', fontsize=9)
         self.ax1.set_ylim(0, 255)  # 固定y軸範圍為0-255（強度值）
         n = self.config['display']['smoothing_window']
-        smoothing_status = f'SMA(N={n})' if self.config['display'].get('enable_smoothing', True) else 'Raw'
+        smoothing_status = f'MAX(N={n})' if self.config['display'].get('enable_smoothing', True) else 'Raw'
         title = f'Drawer Intensity ({smoothing_status}) — High=Near/Closed, Low=Far/Open'
         self.ax1.set_title(title, fontsize=10)
         self.ax1.legend(loc='upper right', fontsize=8)

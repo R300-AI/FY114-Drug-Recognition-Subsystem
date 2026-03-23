@@ -4,6 +4,7 @@ Provides OpenCV-style object-oriented interface for sensor configuration
 """
 
 from typing import Tuple, Optional
+from collections import deque
 import numpy as np
 import cv2
 import logging
@@ -16,6 +17,11 @@ from .mn96100c import USBDeviceComm
 # Constants
 INIT_SLEEP_TIME = 0.2
 RELEASE_SLEEP_TIME = 0.2
+
+# Warmup constants
+WARMUP_IDLE_THRESHOLD = 300  # seconds (5 minutes)
+WARMUP_DURATION = 10         # seconds
+READ_LOG_MAXLEN = 100        # keep last N read timestamps
 
 
 class MN96100CConfig:
@@ -91,6 +97,9 @@ class VideoCapture:
         self.usb_comm = None
         self._is_opened = False
 
+        # Read timestamp log: stores time.time() of each successful read (max 100)
+        self._read_timestamps: deque = deque(maxlen=READ_LOG_MAXLEN)
+
         # Store device identifiers for later use
         self.vid = vid
         self.pid = pid
@@ -134,10 +143,34 @@ class VideoCapture:
                 self._logger.error(f"Failed to send {name} command: {e}")
                 raise
         
+    def _needs_warmup(self) -> bool:
+        """Return True if idle time since last successful read exceeds WARMUP_IDLE_THRESHOLD."""
+        if not self._read_timestamps:
+            return False
+        idle = time.time() - self._read_timestamps[-1]
+        return idle > WARMUP_IDLE_THRESHOLD
+
+    def _run_warmup(self):
+        """Stream frames for WARMUP_DURATION seconds without returning data (camera warm-up)."""
+        self._logger.info(
+            f"Camera idle for >{WARMUP_IDLE_THRESHOLD}s — running {WARMUP_DURATION}s warmup..."
+        )
+        deadline = time.time() + WARMUP_DURATION
+        while time.time() < deadline:
+            try:
+                self.usb_comm.get_image()
+            except Exception:
+                pass
+        self._logger.info("Warmup complete.")
+
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
         Read frame from device.
-        
+
+        If the camera has been idle for more than WARMUP_IDLE_THRESHOLD seconds,
+        a WARMUP_DURATION-second warmup stream is executed first (frames discarded).
+        Each successful read is logged; only the latest READ_LOG_MAXLEN entries are kept.
+
         Returns:
             Tuple of (success, frame) where:
             - success: True if frame was read successfully
@@ -146,15 +179,21 @@ class VideoCapture:
         if not self.isOpened():
             self._logger.warning("Device not opened")
             return False, None
-            
+
+        if self._needs_warmup():
+            self._run_warmup()
+
         try:
             raw_data, _ = self.usb_comm.get_image()
-            
+
             if not raw_data:
                 return False, None
-                
-            return self._process_raw_data(raw_data)
-            
+
+            result = self._process_raw_data(raw_data)
+            if result[0]:  # success
+                self._read_timestamps.append(time.time())
+            return result
+
         except Exception as e:
             self._logger.error(f"Error reading frame: {e}")
             return False, None
