@@ -189,10 +189,10 @@ class VideoCapture:
         Compute required warmup duration based on idle time.
 
         Staircase: every WARMUP_STEP_SECONDS of idle = 1s warmup, capped at WARMUP_MAX_SECONDS.
-        Returns 0 if no warmup needed.
+        Returns WARMUP_MAX_SECONDS on first startup (no previous timestamp).
         """
         if self._last_read_time is None:
-            return 0
+            return WARMUP_MAX_SECONDS   # 首次啟動 → 最長暖機
         idle = time.time() - self._last_read_time
         return min(int(idle // WARMUP_STEP_SECONDS), WARMUP_MAX_SECONDS)
 
@@ -201,19 +201,24 @@ class VideoCapture:
         return self._warmup_duration() > 0
 
     def _run_warmup(self):
-        """Stream frames for the computed warmup duration without returning data."""
+        """Stream frames for the computed warmup duration, printing n/m countdown."""
         duration = self._warmup_duration()
-        idle = time.time() - self._last_read_time
-        self._logger.info(
-            f"Camera idle for {idle:.0f}s — running {duration}s warmup..."
-        )
-        deadline = time.time() + duration
-        while time.time() < deadline:
-            try:
-                self.usb_comm.get_image()
-            except Exception:
-                pass
-        self._logger.info("Warmup complete.")
+        if self._last_read_time is None:
+            print(f"[sensor] 首次啟動 → 暖機 {duration}s", flush=True)
+        else:
+            idle = time.time() - self._last_read_time
+            print(f"[sensor] 距上次讀取 {idle:.0f}s → 暖機 {duration}s", flush=True)
+
+        for i in range(duration):
+            print(f"[sensor] 暖機中 {i + 1}/{duration}", flush=True)
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                try:
+                    self.usb_comm.get_image()
+                except Exception:
+                    pass
+
+        print("[sensor] 暖機完成", flush=True)
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         """

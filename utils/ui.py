@@ -270,39 +270,10 @@ class App:
             if not self._drawer_cap.isOpened():
                 raise RuntimeError("MN96100C not opened")
 
-            # ── 根據上次 log 時間決定暖機秒數 ──
-            # 每距上次關閉 30 秒 → +1 秒暖機，上限 10 秒
-            log_path = Path("logs/drawer_state.log")
-            warmup_secs = 10  # 預設（首次啟動 / log 讀取失敗）
-            if log_path.exists():
-                try:
-                    lines = log_path.read_text(encoding='utf-8').splitlines()
-                    last = next((l for l in reversed(lines) if l.strip()), None)
-                    if last:
-                        last_time = datetime.strptime(last.split('  ')[0].strip(),
-                                                      "%Y-%m-%d %H:%M:%S")
-                        diff = (datetime.now() - last_time).total_seconds()
-                        warmup_secs = min(10, int(diff // 30))
-                        print(f"[drawer] 距上次關閉 {diff:.0f}s → 暖機 {warmup_secs}s")
-                    else:
-                        print(f"[drawer] log 為空 → 暖機 {warmup_secs}s")
-                except Exception as ex:
-                    print(f"[drawer] 無法解析上次 log（{ex}）→ 暖機 {warmup_secs}s")
-            else:
-                print(f"[drawer] 首次啟動，無 log → 暖機 {warmup_secs}s")
-
-            # ── 暖機倒數（UI + terminal）──
-            if warmup_secs > 0:
-                for i in range(warmup_secs):
-                    msg = f"感測器暖機 {i + 1}/{warmup_secs}"
-                    print(f"[drawer] {msg}")
-                    self.badge_label.config(text=msg)
-                    self.root.update()
-                    time.sleep(1)
-                self.badge_label.config(text="待分析")
-                self.root.update()
-            else:
-                print("[drawer] 暖機跳過（距上次關閉時間短）")
+            # 暖機由 VideoCapture.read() 內部自動處理（eminent），
+            # 此處僅在 UI 顯示等待提示
+            self.badge_label.config(text="感測器啟動中")
+            self.root.update()
 
             self._drawer_analyzer = DepthAnalyzer()
             self._drawer_detector = DrawerStateDetector(
