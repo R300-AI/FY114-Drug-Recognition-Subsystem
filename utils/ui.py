@@ -771,9 +771,9 @@ class App:
         if self._drawer_cap is None and not self._debug:
             text = "感測器未連線"
         elif sm == "WAIT_OPEN":
-            text = "請拉開抽屜放入藥盤"
+            text = "請拉開抽屜"
         elif sm == "WAIT_CLOSE":
-            text = "請關閉抽屜"
+            text = "請放入藥盤並關閉抽屜"
         elif sm == "ANALYSING":
             # 分析失敗後仍在此狀態，引導使用者重拉抽屜
             text = "請重新拉開抽屜"
