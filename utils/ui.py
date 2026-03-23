@@ -155,9 +155,15 @@ class App:
         self._drawer_cap              = None
         self._drawer_running          = False
         self._drawer_thread           = None
-        self._drawer_consecutive_closed = 0
-        self._drawer_triggered        = False
-        self._drawer_close_threshold  = 5      # 從 config 覆寫
+        # 狀態機：WAIT_OPEN → WAIT_CLOSE → ANALYSING → WAIT_CLOSE → ...
+        # WAIT_OPEN : 開機後等待首次確認開啟（避免開機抽屜已閉誤觸）
+        # WAIT_CLOSE: 已確認開啟，等待閉合以觸發分析
+        # ANALYSING : 分析已觸發，鎖住直到抽屜再次確認開啟
+        self._drawer_sm_state         = "WAIT_OPEN"
+        self._drawer_consecutive_closed  = 0
+        self._drawer_consecutive_opened  = 0
+        self._drawer_close_threshold  = 5      # 連續 N 幀「完全閉合」才觸發
+        self._drawer_open_threshold   = 5      # 連續 N 幀「完全開啟」才確認開啟
 
         # --- 視窗 ---
         self.root.title("AI藥品輔助辨識")
@@ -334,19 +340,41 @@ class App:
             consecutive_failures = 0
             state = self._drawer_cap.state
 
-            if not self._drawer_triggered:
+            if self._drawer_sm_state == "WAIT_OPEN":
+                # 等待連續 N 幀「完全開啟」確認抽屜已實際拉出
+                if state == "完全開啟":
+                    self._drawer_consecutive_opened += 1
+                    if self._drawer_consecutive_opened >= self._drawer_open_threshold:
+                        self._drawer_sm_state = "WAIT_CLOSE"
+                        self._drawer_consecutive_opened = 0
+                        self._drawer_consecutive_closed = 0
+                        print("[drawer] 抽屜開啟確認，開始監控閉合", flush=True)
+                else:
+                    self._drawer_consecutive_opened = 0
+
+            elif self._drawer_sm_state == "WAIT_CLOSE":
+                # 等待連續 N 幀「完全閉合」才觸發分析
                 if state == "完全閉合":
                     self._drawer_consecutive_closed += 1
                     if self._drawer_consecutive_closed >= self._drawer_close_threshold:
-                        self._drawer_triggered = True
+                        self._drawer_sm_state = "ANALYSING"
                         self._drawer_consecutive_closed = 0
+                        self._drawer_consecutive_opened = 0
                         self.root.after(0, self._on_drawer_closed)
                 else:
                     self._drawer_consecutive_closed = 0
-            else:
+
+            elif self._drawer_sm_state == "ANALYSING":
+                # 分析鎖住期間，需連續 N 幀「完全開啟」才解鎖
                 if state == "完全開啟":
-                    self._drawer_triggered = False
-                    self._drawer_consecutive_closed = 0
+                    self._drawer_consecutive_opened += 1
+                    if self._drawer_consecutive_opened >= self._drawer_open_threshold:
+                        self._drawer_sm_state = "WAIT_CLOSE"
+                        self._drawer_consecutive_opened = 0
+                        self._drawer_consecutive_closed = 0
+                        print("[drawer] 抽屜重新開啟，準備下次觸發", flush=True)
+                else:
+                    self._drawer_consecutive_opened = 0
 
     def _on_drawer_closed(self):
         """抽屜閉合事件（主執行緒）— 直接呼叫分析，UI 在分析期間暫停回應"""
