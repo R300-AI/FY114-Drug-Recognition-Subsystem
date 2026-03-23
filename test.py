@@ -93,12 +93,10 @@ def test_light() -> bool:
         log("  ↳ Initializing WS2812 LED Ring (GPIO18, 24 LEDs)...")
         pixels = neopixel.NeoPixel(board.D18, 24)
         
-        log("  ↳ White → Off")
+        log("  ↳ White (stays on)")
         pixels.fill((255, 255, 255))
         time.sleep(0.5)
-        pixels.fill((0, 0, 0))
-        time.sleep(0.2)
-        
+
         log("  ↳ LED control successful ✓")
         return True
     except ImportError as e:
