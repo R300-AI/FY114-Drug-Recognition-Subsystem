@@ -379,6 +379,7 @@ class App:
                         self._drawer_consecutive_opened = 0
                         self._drawer_consecutive_closed = 0
                         print("[drawer] 抽屜重新開啟，準備下次觸發", flush=True)
+                        self.root.after(0, self._reset_state)
                 else:
                     self._drawer_consecutive_opened = 0
 
@@ -795,6 +796,7 @@ class App:
             self._update_state_from_results([], [])
             self._switch_tab("cam")
             self._refresh_image()
+            self.done_btn.config(state=tk.NORMAL, bg=COLOR_DONE)
             self._show_info_modal("提示", "未偵測到任何藥錠，請確認藥盤擺放位置與光線條件。")
             return
 
