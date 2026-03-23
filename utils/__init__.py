@@ -9,7 +9,7 @@
             MatchResult   比對結果資料類別
   ui        App           Tkinter GUI 應用程式
 
-自訂模型（在 run.py 繼承以下基底類別）：
+自訂模型（在 utils/models.py 繼承以下基底類別）：
   class MyDetector(BaseDetector):
       def __init__(self): ...
       def forward(self, image) -> list[Detection]: ...

@@ -8,7 +8,7 @@
 
 run.py 只需：
     from utils.ui import App
-    App(root, gallery, encoder, matcher, detector, fullscreen=..., debug=...)
+    App(root, api_url=..., fullscreen=..., debug=...)
     root.mainloop()
 """
 
@@ -147,7 +147,6 @@ class App:
         # --- 相機 ---
         self._camera = None
         self._is_picamera = False
-        self._camera_lock = threading.Lock()
 
         # --- LED ---
         self.led_pixels = None
@@ -337,6 +336,8 @@ class App:
 
             if not ret or frame is None:
                 consecutive_failures += 1
+                if consecutive_failures == 1 or consecutive_failures % 10 == 0:
+                    print(f"[drawer] Read failed (consecutive={consecutive_failures})", flush=True)
                 if consecutive_failures >= MAX_FAILURES:
                     print("[drawer] Sensor disconnected")
                     break
@@ -393,9 +394,8 @@ class App:
                 print(f"[drawer] Loop error: {e}")
 
     def _on_drawer_closed(self):
-        """抽屜閉合事件（UI 執行緒）— 分析丟到背景執行緒避免凍結 UI"""
-        t = threading.Thread(target=self._on_analyse, daemon=True)
-        t.start()
+        """抽屜閉合事件（主執行緒）— 直接呼叫分析，UI 在分析期間暫停回應"""
+        self._on_analyse()
 
     def _capture_single_frame(self) -> np.ndarray | None:
         """短暫啟動相機，拍攝一幀後立即停止。回傳 BGR (H,W,3) 或 None"""
@@ -776,22 +776,19 @@ class App:
         return detections, results
 
     def _on_analyse(self):
-        """抽屜閉合觸發：拍照 → 呼叫推論 API（背景執行緒），UI 更新回拋主執行緒"""
+        """抽屜閉合觸發：拍照 → 呼叫推論 API → 更新 UI（全程主執行緒）"""
         if self._is_analysed:
             return   # 正在 REVIEWING 中，忽略重複觸發
 
-        # ── 拍攝（背景執行緒）──
         print("[analyse] Capturing frame...")
         frame = self._capture_single_frame()
         if frame is None:
             print("[analyse] Capture failed")
-            self.root.after(0, lambda: self._show_info_modal(
-                "提示", "相機拍攝失敗，請確認相機連接狀態。"))
+            self._show_info_modal("提示", "相機拍攝失敗，請確認相機連接狀態。")
             return
 
         self._captured_image = frame.copy()
 
-        # ── 偵測 & 比對（背景執行緒）──
         print("[analyse] Running detection...")
         try:
             if self._debug:
@@ -801,45 +798,34 @@ class App:
                 detections, results = self._call_api(frame)
         except requests.exceptions.ConnectionError:
             print("[analyse] API connection failed")
-            self.root.after(0, lambda: self._show_info_modal(
-                "連線錯誤", f"無法連線至推論伺服器 {self._api_url}\n請確認 api.py 已啟動。"))
+            self._show_info_modal(
+                "連線錯誤", f"無法連線至推論伺服器 {self._api_url}\n請確認 api.py 已啟動。")
             return
         except Exception as e:
             print(f"[analyse] Error: {e}")
-            self.root.after(0, lambda: self._show_info_modal(
-                "辨識錯誤", f"推論過程發生錯誤：{e}"))
+            self._show_info_modal("辨識錯誤", f"推論過程發生錯誤：{e}")
             return
 
         if not detections:
             print("[analyse] No pills detected")
-            _ai_img = frame.copy()
-            def _no_detect():
-                self._ai_image = _ai_img
-                self._is_analysed = True
-                self._update_state_from_results([], [])
-                self._switch_tab("cam")
-                self._refresh_image()
-                self._show_info_modal("提示", "未偵測到任何藥錠，請確認藥盤擺放位置與光線條件。")
-            self.root.after(0, _no_detect)
+            self._ai_image = frame.copy()
+            self._is_analysed = True
+            self._update_state_from_results([], [])
+            self._switch_tab("cam")
+            self._refresh_image()
+            self._show_info_modal("提示", "未偵測到任何藥錠，請確認藥盤擺放位置與光線條件。")
             return
 
-        # ── 純資料計算，可在背景做 ──
         self._update_state_from_results(detections, results)
         self._detections = detections
-        _ai_img = self._generate_ai_overlay(frame, detections, self.state.pills, current_page=0)
-
-        # ── 所有 UI 操作回拋主執行緒 ──
-        def _update_ui():
-            self._is_analysed = True
-            self._ai_image = _ai_img
-            self.current_tab = "ai"
-            self._update_tab_buttons()
-            self._refresh_image()
-            self._update_info_panel()
-            self.done_btn.config(state=tk.NORMAL, bg=COLOR_DONE)
-            print("[analyse] Done")
-
-        self.root.after(0, _update_ui)
+        self._is_analysed = True
+        self._ai_image = self._generate_ai_overlay(frame, detections, self.state.pills, current_page=0)
+        self.current_tab = "ai"
+        self._update_tab_buttons()
+        self._refresh_image()
+        self._update_info_panel()
+        self.done_btn.config(state=tk.NORMAL, bg=COLOR_DONE)
+        print("[analyse] Done")
 
     def _generate_ai_overlay(
         self,
