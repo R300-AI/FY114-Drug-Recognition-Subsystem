@@ -12,12 +12,14 @@ Gallery（特徵庫）與 YOLO 模型由 [FY115-Drug-Visual-AI-Search-Platform](
 ```
 1. 系統啟動 → 黑畫面（待分析狀態）
 
-2. 將藥盤放置於相機下方 → 按「分析」
+2. 將藥盤放置於相機下方，推入抽屜
 
-3. 系統自動：
+3. 2.5D 感測器連續判定抽屜閉合 → 自動觸發分析：
    ├── 拍攝一張靜態照片
-   ├── YOLO 偵測藥錠
-   ├── 特徵編碼 + Gallery 比對
+   ├── 呼叫推論 API（api.py）
+   │   ├── YOLO 偵測藥錠
+   │   ├── 特徵編碼 + Gallery 比對
+   │   └── 查詢 DrugTW2025.csv 取得藥品資訊
    └── 自動切換到 AI 頁（顯示 YOLO 遮罩疊加圖）
 
 4. 護理師逐項確認：
@@ -27,10 +29,12 @@ Gallery（特徵庫）與 YOLO 模型由 [FY115-Drug-Visual-AI-Search-Platform](
       （可切換鏡頭/AI 頁對照確認）
 
 5. 按「完成」
-   ├── 有未填 → 「提示」Modal（只能「回去檢查」）
-   └── 全填完 → 「完成」Modal
+   ├── 有未填 → 提示 Modal（回去補填）
+   └── 全填完 → 確認 Modal
        ├── 「重新回饋」→ 清空答案，重新確認
-       └── 「OK」→ 儲存驗證記錄 → 回到黑畫面
+       └── 「確認送出」→ 儲存驗證記錄 → 回到黑畫面
+
+6. 拉開抽屜 → 2.5D 感測器偵測開啟 → 解除觸發鎖，等待下一次分析
 ```
 
 ---
@@ -62,11 +66,17 @@ source .venv/bin/activate
 ### 步驟 3：安裝 Python 套件
 
 ```bash
+# 相機與影像
 pip install picamera2
+pip install opencv-python pillow pyyaml "numpy>=1.24.0,<2.0.0"
+
+# AI 推論（api.py 端）
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install ultralytics==8.4.3
-pip install opencv-python pillow pyyaml "numpy>=1.24.0,<2.0.0"
-pip install pyusb matplotlib
+pip install flask
+
+# UI 端
+pip install requests matplotlib pyusb
 ```
 
 > PyTorch 指定 CPU 版；ultralytics 鎖定 8.4.3（numpy < 2.0.0 相容性限制）。
@@ -118,19 +128,37 @@ python test.py --detector --encoder --matcher
 
 ## 啟動
 
+AI 推論（`api.py`）與 UI（`run.py`）為兩個獨立程序，需分別啟動。
+
+### 1. 啟動推論 API 伺服器
+
 ```bash
-# 主程式
-python run.py                # 視窗模式（開發測試）
-python run.py --fullscreen   # 全螢幕模式（觸控螢幕部署）
+python api.py
+```
 
-# 指定自訂 Gallery 和模型
-python run.py --gallery path/to/gallery --model path/to/best.pt
+啟動後監聽 `0.0.0.0:5000`，可透過 `GET /health` 確認就緒：
 
-# Drawer Monitor（MN96100C 2.5D 傳感器校準工具）
+```bash
+curl http://localhost:5000/health
+# {"status": "ok", "gallery_size": 1024}
+```
+
+### 2. 啟動 UI
+
+```bash
+python run.py                              # 視窗模式（開發測試）
+python run.py --fullscreen                 # 全螢幕模式（觸控螢幕部署）
+python run.py --api http://HOST:5000       # 指定 API 伺服器位址
+python run.py --debug                      # Debug 模式（不需相機、感測器或 API）
+```
+
+### Drawer Monitor（校準工具）
+
+```bash
 python drawer_monitor.py
 ```
 
-> Drawer Monitor 提供即時深度影像、雙通道時間序列圖、動態閾值調整與 SMA 濾波調校。
+> Drawer Monitor 提供即時深度影像、雙通道時間序列圖、動態閾值調整與 MAX 濾波調校。
 > 詳細操作說明：[docs/DRAWER_MONITOR_README.md](docs/DRAWER_MONITOR_README.md)
 
 ---
@@ -144,38 +172,43 @@ crontab -e
 # @reboot /完整路徑/FY114-Drug-Recognition-Subsystem/startup.sh
 ```
 
+> `startup.sh` 應依序啟動 `api.py`（背景）再啟動 `run.py`。
+
 ---
 
 ## 部署 Gallery 與模型
 
-從 FY115 工作站生成後，複製至此目錄：
+從 FY115 工作站生成後，複製至此目錄（`api.py` 讀取這些路徑）：
 
 ```bash
 # 透過 SCP 從工作站推送
 scp -r path/to/FY115/src/gallery pi@<rpi_ip>:~/FY114-Drug-Recognition-Subsystem/src/
 scp path/to/FY115/src/best.pt   pi@<rpi_ip>:~/FY114-Drug-Recognition-Subsystem/src/
 
-# 或在 Pi 上執行 git pull
+# 或在 Pi 上執行 git pull（best.pt 需另外處理，見 .gitignore）
 ```
+
+部署後重啟 `api.py` 使新模型生效。
 
 ---
 
 ## 自訂 Encoder / Matcher
 
-在 `utils/modules/encoder/` 或 `utils/modules/matcher/` 新增模組，繼承對應基底類別，
-再於 `run.py` 的 `create_components()` 中替換：
+在 `run.py` 中替換對應類別定義，`api.py` 匯入時會自動使用新實作：
 
 ```python
-def create_components(...):
-    # encoder = ResNet34Encoder()
-    encoder = MyEncoder()
-    # matcher = Top1Matcher(gallery)
-    matcher = MyMatcher(gallery)
+# run.py — 繼承 BaseEncoder，覆寫 forward()
+class MyEncoder(BaseEncoder):
+    FEATURE_DIM = 256
+    def __init__(self): ...
+    def forward(self, image: np.ndarray) -> np.ndarray: ...
 ```
 
-> **注意**：更換 Encoder 後，必須在 FY115 重新建立 Gallery（特徵向量維度必須與新 Encoder 一致）。
+> **注意**：更換 Encoder 後，必須在 FY115 重新建立 Gallery（特徵向量維度必須一致），
+> 並重啟 `api.py`。
 >
 > 基底類別 API 與模組結構說明：[docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)
+> 推論 API 規格：[docs/API_DESIGN.md](docs/API_DESIGN.md)
 
 ---
 
@@ -183,21 +216,23 @@ def create_components(...):
 
 ```
 FY114-Drug-Recognition-Subsystem/
-├── run.py                     ← 主程式（Tkinter GUI）
-├── drawer_monitor.py          ← 2.5D 傳感器校準工具
+├── run.py                     ← UI 程序（Tkinter GUI + 相機 + 抽屜感測）
+├── api.py                     ← 推論 API 伺服器（YOLO + Encoder + Matcher）
+├── drawer_monitor.py          ← 2.5D 感測器校準工具
 ├── test.py                    ← 硬體與模組整合測試
+├── DrugTW2025.csv             ← 台灣 FDA 合法藥品清單（api.py 查詢用）
 ├── startup.sh                 ← 開機自動啟動腳本
 ├── config/
-│   ├── drawer_config.yaml     ← Drawer Monitor 運行時配置（自動生成）
-│   └── drawer_config_example.yaml  ← 配置說明範例
+│   └── drawer_config.yaml     ← 抽屜感測器配置（閾值、ROI、濾波參數）
 ├── src/
 │   ├── best.pt                ← YOLO 分割模型（由 FY115 提供）
 │   ├── gallery/               ← 特徵庫（index.json + features.npy）
-│   └── images/                ← 驗證記錄（YAML + JPG）
+│   └── sample/                ← Debug 用樣本影像與標注
 ├── utils/                     ← 核心模組（BaseDetector/Encoder/Matcher 等）
-├── eminent/sensors/vision2p5d/ ← MN96100C 2.5D 傳感器驅動
+├── eminent/sensors/vision2p5d/ ← MN96100C 2.5D 感測器驅動
 └── docs/
-    ├── DRAWER_MONITOR_README.md  ← 2.5D 傳感器完整技術文件
+    ├── API_DESIGN.md          ← 推論 API 工程設計文件
+    ├── DRAWER_MONITOR_README.md  ← 2.5D 感測器完整技術文件
     └── DEVELOPER_GUIDE.md        ← 模組 API、儲存格式、擴充開發指南
 ```
 
@@ -213,4 +248,6 @@ FY114-Drug-Recognition-Subsystem/
 | `picamera2` 找不到 | venv 缺少 `--system-site-packages` | 重建 venv（步驟 2） |
 | GPIO 操作需要 root | 未加入 gpio 群組或未重新登入 | 重做步驟 4 |
 | `usb.core.USBError` | MN96100C USB 裝置權限不足 | `sudo chmod 666 /dev/bus/usb/*/*` 或設定 udev 規則 |
-| MN96100C 無法初始化 | VID/PID 錯誤或裝置未連接 | 確認 `lsusb` 顯示 `04f3:0c7e`，檢查 USB 連接 |
+| MN96100C 無法初始化 | VID/PID 錯誤或裝置未連接 | 確認 `lsusb` 顯示對應 VID/PID，檢查 USB 連接 |
+| `無法連線至推論伺服器` | api.py 尚未啟動 | 先執行 `python api.py`，確認 `/health` 回應正常 |
+| Gallery 為空 | Gallery 尚未部署 | 從 FY115 複製 `src/gallery/`，重啟 `api.py` |

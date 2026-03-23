@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-run.py — FY114 藥物辨識子系統
+run.py — FY114 藥物辨識子系統 UI 程序
 
-此檔案包含三個預設模型實作（可直接替換）：
+此檔案包含三個預設模型實作（供 api.py 匯入使用，替換時修改此處）：
 
-  YOLODetector   繼承 BaseDetector，使用 ultralytics YOLO 分割模型
+  YOLODetector    繼承 BaseDetector，使用 ultralytics YOLO 分割模型
   ResNet34Encoder 繼承 BaseEncoder，使用 torchvision ResNet34（512 維）
-  Top1Matcher    繼承 BaseMatcher，使用 Top-1 餘弦相似度
+  Top1Matcher     繼承 BaseMatcher，使用 Top-1 餘弦相似度
 
 替換範例：
   class MyEncoder(BaseEncoder):
@@ -14,10 +14,10 @@ run.py — FY114 藥物辨識子系統
       def __init__(self): ...
       def forward(self, image): ...  # 回傳 (256,) 原始特徵，不需 L2 正規化
 
-  # 在 create_components() 中替換：
-  encoder = MyEncoder()
+  # 更換 Encoder 後需在 FY115 重新建立 Gallery，並重啟 api.py。
 
-  # 更換 Encoder 後需在 FY115 重新建立 Gallery。
+AI 推論由 api.py 負責，本程序只負責 UI、相機、抽屜感測與紀錄儲存。
+啟動順序：先啟動 api.py，再啟動 run.py。
 """
 
 import argparse
@@ -192,57 +192,28 @@ class Top1Matcher(BaseMatcher):
 # 元件工廠
 # ============================================================
 
-def create_components(
-    gallery_path: str = "src/gallery",
-    model_path:   str = "src/best.pt",
-) -> tuple[Gallery, BaseEncoder, BaseMatcher, BaseDetector]:
-    """建立並回傳預設元件
-
-    替換模型時，修改此函式即可，無需更動 utils/ui.py。
-    """
-    if not Path(model_path).exists():
-        raise FileNotFoundError(f"找不到模型檔案：{model_path}")
-
-    gallery = Gallery(gallery_path)
-    gallery.load()
-    if gallery.size == 0:
-        print(f"[init] Warning: Gallery 為空或載入失敗：{gallery_path}")
-
-    encoder  = ResNet34Encoder()
-    matcher  = Top1Matcher(gallery)
-    detector = YOLODetector(model_path)
-    return gallery, encoder, matcher, detector
-
-
 # ============================================================
 # 主程式入口
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="FY114 藥物辨識子系統")
+    parser = argparse.ArgumentParser(description="FY114 藥物辨識子系統 UI")
     parser.add_argument("--fullscreen", action="store_true",
                         help="全螢幕模式（觸控螢幕）")
-    parser.add_argument("--gallery", default="src/gallery",
-                        help="Gallery 目錄路徑")
-    parser.add_argument("--model", default="src/best.pt",
-                        help="YOLO 模型路徑")
+    parser.add_argument("--api", default="http://localhost:5000",
+                        help="推論 API 伺服器位址（預設：http://localhost:5000）")
     parser.add_argument("--debug", action="store_true",
-                        help="除錯模式（Windows/無相機）：跳過相機與 LED，以雜訊圖作為測試輸入")
+                        help="除錯模式（Windows/無相機）：跳過相機與 LED，以雜訊圖作為測試輸入，不需 API 伺服器")
     args = parser.parse_args()
 
     if args.debug:
-        print("[init] Debug mode ON: camera and LED will be skipped")
-
-    print("[init] Loading components...")
-    gallery, encoder, matcher, detector = create_components(
-        gallery_path=args.gallery,
-        model_path=args.model,
-    )
+        print("[init] Debug mode ON: camera, LED and API will be skipped")
+    else:
+        print(f"[init] API endpoint: {args.api}")
 
     print("[init] Starting GUI...")
     root = tk.Tk()
-    App(root, gallery, encoder, matcher, detector,
-        fullscreen=args.fullscreen, debug=args.debug)
+    App(root, api_url=args.api, fullscreen=args.fullscreen, debug=args.debug)
     root.mainloop()
 
 

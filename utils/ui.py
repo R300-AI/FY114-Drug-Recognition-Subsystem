@@ -12,6 +12,7 @@ run.py 只需：
     root.mainloop()
 """
 
+import base64
 import logging
 import re
 import time
@@ -24,6 +25,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import requests
 from PIL import Image, ImageTk
 import yaml
 
@@ -35,10 +37,6 @@ try:
 except ImportError:
     HAS_LED = False
 
-from .encoder import BaseEncoder
-from .matcher import BaseMatcher
-from .detector import BaseDetector
-from .gallery import Gallery
 from .types import Detection, MatchResult
 
 # ============================================================
@@ -130,19 +128,13 @@ class App:
     def __init__(
         self,
         root: tk.Tk,
-        gallery: Gallery,
-        encoder: BaseEncoder,
-        matcher: BaseMatcher,
-        detector: BaseDetector,
+        api_url: str = "http://localhost:5000",
         fullscreen: bool = False,
         debug: bool = False,
     ):
-        self.root     = root
-        self.gallery  = gallery
-        self.encoder  = encoder
-        self.matcher  = matcher
-        self.detector = detector
-        self._debug   = debug
+        self.root    = root
+        self._api_url = api_url.rstrip("/")
+        self._debug  = debug
 
         # --- 狀態 ---
         self.state = VerificationState()
@@ -246,6 +238,11 @@ class App:
         if self._debug:
             print("[drawer] Debug mode: sensor skipped — press Space to simulate close")
             self.root.bind("<space>", lambda e: self._on_drawer_closed())
+            # 啟動模擬串流 loop（讓 terminal 可看到假資料在跑）
+            self._drawer_running = True
+            self._drawer_thread = threading.Thread(
+                target=self._debug_drawer_loop, daemon=True)
+            self._drawer_thread.start()
             return
 
         cfg_path = Path("config/drawer_config.yaml")
@@ -299,6 +296,18 @@ class App:
         except Exception as e:
             print(f"[drawer] Init failed: {e} — auto-trigger disabled")
             self._drawer_cap = None
+
+    def _debug_drawer_loop(self):
+        """Debug 模式：模擬持續串流輸出（正弦波強度，不觸發分析）"""
+        import math
+        t = 0
+        while self._drawer_running:
+            intensity = 60.0 + 40.0 * math.sin(t * 0.05)  # 20~100，永遠開啟區間
+            state = "完全開啟"
+            print(f"[drawer] state={state:<6}  intensity={intensity:6.1f}  [debug sim]",
+                  flush=True)
+            t += 1
+            time.sleep(0.1)
 
     def _start_drawer_monitoring(self):
         self._drawer_running = True
@@ -358,7 +367,9 @@ class App:
 
                 state = self._drawer_detector.update(smoothed)
 
-                # 每幀都記錄 log
+                # 每幀都串流輸出（terminal + file）
+                log_line = f"[drawer] state={state:<6}  intensity={smoothed:6.1f}"
+                print(log_line, flush=True)
                 if self._drawer_logger:
                     self._drawer_logger.info(f"state={state}  intensity={smoothed:.1f}")
 
@@ -382,8 +393,9 @@ class App:
                 print(f"[drawer] Loop error: {e}")
 
     def _on_drawer_closed(self):
-        """抽屜閉合事件（UI 執行緒）"""
-        self._on_analyse()
+        """抽屜閉合事件（UI 執行緒）— 分析丟到背景執行緒避免凍結 UI"""
+        t = threading.Thread(target=self._on_analyse, daemon=True)
+        t.start()
 
     def _capture_single_frame(self) -> np.ndarray | None:
         """短暫啟動相機，拍攝一幀後立即停止。回傳 BGR (H,W,3) 或 None"""
@@ -668,23 +680,16 @@ class App:
     # --------------------------------------------------------
 
     def _debug_fake_results(self, n: int) -> list:
-        """Debug 模式：為每顆偵測到的藥錠分配不同的假 MatchResult。
-
-        每顆藥錠循環取 gallery 中不同藥品（step=2 跳過正反面重複），
-        確保 n 顆藥 → n 個不同 license_number → n 頁可導覽。
-        """
-        results = []
-        size = self.gallery.size
-        for i in range(n):
-            idx = (i * 2) % size if size > 0 else 0
-            meta = self.gallery.get_metadata(idx) if size > 0 else {}
-            results.append(MatchResult(
-                license_number=meta.get("license_number", f"DEMO-{i+1:03d}"),
-                name=meta.get("name", f"Demo Drug {i+1}"),
-                side=meta.get("side", 0),
+        """Debug 模式：為每顆偵測到的藥錠分配不同的假 MatchResult（不需 API）。"""
+        return [
+            MatchResult(
+                license_number=f"DEMO-{i+1:03d}",
+                name=f"Demo Drug {i+1}",
+                side=0,
                 score=0.95,
-            ))
-        return results
+            )
+            for i in range(n)
+        ]
 
     def _load_sample_detections(self, frame: np.ndarray) -> list:
         """Debug 模式：解析 src/sample/sample.txt（YOLO-seg 格式）合成 Detection 列表。
@@ -729,69 +734,112 @@ class App:
         print(f"[debug] Loaded {len(detections)} detections from sample.txt")
         return detections
 
+    def _call_api(self, frame: np.ndarray) -> tuple[list[Detection], list[MatchResult | None]]:
+        """將影像 POST 至推論 API，回傳重建後的 Detection 與 MatchResult 列表。"""
+        _, img_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        files = {"image": ("image.jpg", img_buf.tobytes(), "image/jpeg")}
+        resp = requests.post(f"{self._api_url}/analyse", files=files, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+
+        detections: list[Detection] = []
+        results:    list[MatchResult | None] = []
+
+        for p in data.get("pills", []):
+            # 解碼 mask（base64 PNG → numpy uint8 0/1）
+            mask = None
+            if p.get("mask_b64"):
+                mask_bytes = base64.b64decode(p["mask_b64"])
+                mask_arr   = np.frombuffer(mask_bytes, dtype=np.uint8)
+                mask_gray  = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
+                if mask_gray is not None:
+                    mask = (mask_gray > 128).astype(np.uint8)
+
+            detections.append(Detection(
+                bbox=tuple(p["bbox"]),
+                mask=mask,
+                confidence=float(p["confidence"]),
+                class_id=int(p["class_id"]),
+            ))
+
+            lic = p.get("license_number", "")
+            if lic:
+                results.append(MatchResult(
+                    license_number=lic,
+                    name=p.get("name", ""),
+                    side=int(p.get("side", 0)),
+                    score=float(p.get("score", 0.0)),
+                ))
+            else:
+                results.append(None)
+
+        return detections, results
+
     def _on_analyse(self):
-        """抽屜閉合觸發：拍照 → 偵測 → 編碼 → 比對 → 更新 UI"""
+        """抽屜閉合觸發：拍照 → 呼叫推論 API（背景執行緒），UI 更新回拋主執行緒"""
         if self._is_analysed:
             return   # 正在 REVIEWING 中，忽略重複觸發
 
-        self.root.update_idletasks()
-
-        # 拍攝
+        # ── 拍攝（背景執行緒）──
         print("[analyse] Capturing frame...")
         frame = self._capture_single_frame()
         if frame is None:
             print("[analyse] Capture failed")
-            self._show_info_modal("提示", "相機拍攝失敗，請確認相機連接狀態。")
+            self.root.after(0, lambda: self._show_info_modal(
+                "提示", "相機拍攝失敗，請確認相機連接狀態。"))
             return
 
         self._captured_image = frame.copy()
 
-        # 偵測 & 比對
+        # ── 偵測 & 比對（背景執行緒）──
         print("[analyse] Running detection...")
-        if self._debug:
-            # Debug 模式：假偵測（sample.txt）+ 假比對結果（循環分配不同藥品）
-            detections = self._load_sample_detections(frame)
-            results = self._debug_fake_results(len(detections))
-        else:
-            detections = self.detector(frame)
-            # TODO: 暫時 mock — 每顆藥錠固定回傳 00008，移除此區塊後換回真實 encoder/matcher
-            import random as _random
-            results: list[MatchResult | None] = []
-            for _ in detections:
-                time.sleep(_random.uniform(0.2, 0.3))
-                results.append(MatchResult(
-                    license_number="00008",
-                    name="Mock Drug 00008",
-                    side=0,
-                    score=1.0,
-                ))
+        try:
+            if self._debug:
+                detections = self._load_sample_detections(frame)
+                results    = self._debug_fake_results(len(detections))
+            else:
+                detections, results = self._call_api(frame)
+        except requests.exceptions.ConnectionError:
+            print("[analyse] API connection failed")
+            self.root.after(0, lambda: self._show_info_modal(
+                "連線錯誤", f"無法連線至推論伺服器 {self._api_url}\n請確認 api.py 已啟動。"))
+            return
+        except Exception as e:
+            print(f"[analyse] Error: {e}")
+            self.root.after(0, lambda: self._show_info_modal(
+                "辨識錯誤", f"推論過程發生錯誤：{e}"))
+            return
 
         if not detections:
             print("[analyse] No pills detected")
-            self._ai_image = frame.copy()
-            self._is_analysed = True
-            self._update_state_from_results([], [])
-            self._switch_tab("cam")
-            self._refresh_image()
-            self._show_info_modal("提示", "未偵測到任何藥錠，請確認藥盤擺放位置與光線條件。")
+            _ai_img = frame.copy()
+            def _no_detect():
+                self._ai_image = _ai_img
+                self._is_analysed = True
+                self._update_state_from_results([], [])
+                self._switch_tab("cam")
+                self._refresh_image()
+                self._show_info_modal("提示", "未偵測到任何藥錠，請確認藥盤擺放位置與光線條件。")
+            self.root.after(0, _no_detect)
             return
 
-        # 先更新狀態（pills 含 color_idx），再用 pills 配色繪 overlay
+        # ── 純資料計算，可在背景做 ──
         self._update_state_from_results(detections, results)
         self._detections = detections
-        self._is_analysed = True
-        self._ai_image = self._generate_ai_overlay(
-            frame, detections, self.state.pills, current_page=0
-        )
+        _ai_img = self._generate_ai_overlay(frame, detections, self.state.pills, current_page=0)
 
-        # 切到 AI 頁
-        self.current_tab = "ai"
-        self._update_tab_buttons()
-        self._refresh_image()
-        self._update_info_panel()
+        # ── 所有 UI 操作回拋主執行緒 ──
+        def _update_ui():
+            self._is_analysed = True
+            self._ai_image = _ai_img
+            self.current_tab = "ai"
+            self._update_tab_buttons()
+            self._refresh_image()
+            self._update_info_panel()
+            self.done_btn.config(state=tk.NORMAL, bg=COLOR_DONE)
+            print("[analyse] Done")
 
-        self.done_btn.config(state=tk.NORMAL, bg=COLOR_DONE)
-        print("[analyse] Done")
+        self.root.after(0, _update_ui)
 
     def _generate_ai_overlay(
         self,
