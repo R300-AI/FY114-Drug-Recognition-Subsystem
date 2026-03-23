@@ -12,6 +12,7 @@ run.py 只需：
     root.mainloop()
 """
 
+import logging
 import re
 import time
 import threading
@@ -171,6 +172,7 @@ class App:
         self._drawer_consecutive_closed = 0   # 連續「完全閉合」次數
         self._drawer_triggered        = False  # True = 已觸發分析，等待開啟後才可再觸發
         self._drawer_close_threshold  = 5      # 預設值，init 時從 config 覆寫
+        self._drawer_logger           = None   # 狀態 log
 
         # --- 視窗 ---
         self.root.title("AI藥品輔助辨識")
@@ -279,6 +281,18 @@ class App:
                 min_state_duration=cfg['analysis']['min_state_duration'],
             )
 
+            # 建立狀態 log（每次啟動清空）
+            log_path = Path("logs/drawer_state.log")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._drawer_logger = logging.getLogger("drawer.state")
+            self._drawer_logger.setLevel(logging.DEBUG)
+            self._drawer_logger.propagate = False
+            if not self._drawer_logger.handlers:
+                handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+                handler.setFormatter(logging.Formatter('%(asctime)s  %(message)s',
+                                                        datefmt='%H:%M:%S'))
+                self._drawer_logger.addHandler(handler)
+
             self._start_drawer_monitoring()
             print("[drawer] MN96100C ready, monitoring started")
 
@@ -343,6 +357,10 @@ class App:
                     smoothed = metrics['mean']
 
                 state = self._drawer_detector.update(smoothed)
+
+                # 每幀都記錄 log
+                if self._drawer_logger:
+                    self._drawer_logger.info(f"state={state}  intensity={smoothed:.1f}")
 
                 if not self._drawer_triggered:
                     # 等待連續閉合 → 觸發分析
