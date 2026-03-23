@@ -95,7 +95,7 @@ class VerificationState:
     pills: list[PillEntry] = field(default_factory=list)   # 每顆一筆
     current_page: int = 0
     name_answers: list[bool | None] = field(default_factory=list)  # per detection
-    dose_answers: dict[str, bool | None] = field(default_factory=dict)  # per license
+    dose_answers: list[bool | None] = field(default_factory=list)  # per detection
 
 
 # ============================================================
@@ -938,7 +938,7 @@ class App:
         self.state.pills = pills
         self.state.current_page = 0
         self.state.name_answers = [None] * len(pills)
-        self.state.dose_answers = {lic: None for lic in unique_licenses}
+        self.state.dose_answers = [None] * len(pills)
 
     # --------------------------------------------------------
     # 資訊面板更新
@@ -998,9 +998,8 @@ class App:
             pill = self.state.pills[self.state.current_page]
             self._apply_btn_state(self.name_ok_btn, self.name_err_btn,
                                   self.state.name_answers[self.state.current_page])
-            # dose_answers 以 license 為 key；未識別藥錠無 dose 按鈕狀態
             self._apply_btn_state(self.dose_ok_btn, self.dose_err_btn,
-                                  self.state.dose_answers.get(pill.license))
+                                  self.state.dose_answers[self.state.current_page])
         else:
             self._apply_btn_state(self.name_ok_btn, self.name_err_btn, None)
             self._apply_btn_state(self.dose_ok_btn, self.dose_err_btn, None)
@@ -1050,9 +1049,7 @@ class App:
 
     def _set_dose(self, value: bool):
         if self.state.pills and 0 <= self.state.current_page < len(self.state.pills):
-            pill = self.state.pills[self.state.current_page]
-            if pill.license:  # 未識別藥錠不記錄 dose
-                self.state.dose_answers[pill.license] = value
+            self.state.dose_answers[self.state.current_page] = value
             self._update_button_states()
             self._clear_highlight(self.dose_row)
             self._auto_switch_ai()
@@ -1105,12 +1102,9 @@ class App:
         for i, ans in enumerate(self.state.name_answers):
             if ans is None:
                 return ("name", i)
-        # dose_answers：per license，找第一顆該 license 的頁碼
-        for lic, ans in self.state.dose_answers.items():
+        for i, ans in enumerate(self.state.dose_answers):
             if ans is None:
-                for i, pill in enumerate(self.state.pills):
-                    if pill.license == lic:
-                        return ("dose", i)
+                return ("dose", i)
         return None
 
     def _on_done(self):
@@ -1181,24 +1175,18 @@ class App:
         add_row(inner, f"總量　{self.state.total_count} 顆", self.state.total_correct, global_bg)
         tk.Frame(inner, bg="#ccc", height=1).pack(fill=tk.X, padx=8, pady=4)
 
-        # 先收集 dose_answers 顯示（以第一次出現的 license 為代表）
-        shown_dose: set[str] = set()
         for i, pill in enumerate(self.state.pills):
             c = DRUG_COLORS[pill.color_idx]
             drug_bg = c["bg"]
             hdr = tk.Frame(inner, bg=drug_bg,
                            highlightbackground=c["border"], highlightthickness=2)
             hdr.pack(fill=tk.X, padx=8, pady=(6, 0))
-            tk.Label(hdr, text=f"第 {i+1} 顆｜{pill.name or pill.license}",
+            tk.Label(hdr, text=f"第 {i+1} 顆｜{pill.name or pill.license or '未識別'}",
                      font=FONT_BOLD, bg=drug_bg, fg="#333",
                      wraplength=440, justify=tk.LEFT, anchor=tk.W,
                      padx=8, pady=4).pack(fill=tk.X)
             add_row(inner, "品項核對", self.state.name_answers[i], drug_bg)
-            # 同款藥只在第一次出現時顯示劑量核對
-            if pill.license and pill.license not in shown_dose:
-                shown_dose.add(pill.license)
-                dose_ans = self.state.dose_answers.get(pill.license)
-                add_row(inner, f"同款 {pill.same_count} 顆", dose_ans, drug_bg)
+            add_row(inner, f"顆數核對（{pill.same_count} 顆）", self.state.dose_answers[i], drug_bg)
 
         all_filled = self._find_first_missing() is None
         btn_frame = tk.Frame(modal, bg=COLOR_BG)
@@ -1290,8 +1278,7 @@ class App:
                 "name": pill.name,
                 "same_count": pill.same_count,
                 "name_correct": self.state.name_answers[i],
-                # dose 答案以 license 共用，未識別藥錠為 None
-                "dose_correct": self.state.dose_answers.get(pill.license),
+                "dose_correct": self.state.dose_answers[i],
             }
 
         yaml_path = RECORDS_DIR / f"{tray_id}.yaml"
@@ -1309,7 +1296,7 @@ class App:
         self.state.variety_correct = None
         self.state.total_correct = None
         self.state.name_answers = [None] * len(self.state.pills)
-        self.state.dose_answers = {lic: None for lic in self.state.dose_answers}
+        self.state.dose_answers = [None] * len(self.state.dose_answers)
         self.state.current_page = 0
         self._update_info_panel()
 

@@ -107,10 +107,13 @@ def analyse():
         print(f"[api]   [{i+1}/{len(detections)}] encoding+matching  "
               f"conf={det.confidence:.2f}  bbox={det.bbox}", flush=True)
         result = _matcher(_encoder(crop))
-        lic    = result.license_number if result else ""
-        name   = result.name if result else "未識別"
-        score  = round(float(result.score), 4) if result else 0.0
-        print(f"[api]   [{i+1}/{len(detections)}] → {lic}  {name}  score={score}", flush=True)
+
+        # ── DEBUG: force all matches to license 衛署罕藥製字第000008號 ──
+        lic   = "衛署罕藥製字第000008號"
+        info  = _drug_db.get(lic, {})
+        name  = info.get("name_zh", "未識別")
+        score = 1.0
+        print(f"[api]   [{i+1}/{len(detections)}] → {lic}  {name}  score={score}  [DEBUG hardcode]", flush=True)
 
         pills.append({
             "bbox":           list(det.bbox),
@@ -119,9 +122,9 @@ def analyse():
             "class_id":       int(det.class_id),
             "license_number": lic,
             "name":           name,
-            "side":           result.side  if result else 0,
+            "side":           0,
             "score":          score,
-            "drug_info":      _drug_db.get(lic, {}),
+            "drug_info":      info,
         })
 
     print(f"[api] done  total={time.time()-t0:.2f}s  matched={len(pills)}", flush=True)
