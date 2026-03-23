@@ -304,14 +304,14 @@ if __name__ == "__main__":
     
     print("=== 深度分析測試 ===")
     print("\n遠處（地板）:")
-    far_metrics = analyzer.calculate_depth_metrics(far_intensity, use_transform=True)
-    print(f"  強度平均: {far_metrics['intensity_mean']:.2f}")
-    print(f"  深度指標: {far_metrics['mean']:.4f}")
-    
+    far_metrics = analyzer.calculate_depth_metrics(far_intensity)
+    print(f"  強度平均 (mean): {far_metrics['mean']:.1f}")
+    print(f"  相對距離 (1/√I): {far_metrics['relative_distance']:.4f}")
+
     print("\n近處（抽屜）:")
-    near_metrics = analyzer.calculate_depth_metrics(near_intensity, use_transform=True)
-    print(f"  強度平均: {near_metrics['intensity_mean']:.2f}")
-    print(f"  深度指標: {near_metrics['mean']:.4f}")
+    near_metrics = analyzer.calculate_depth_metrics(near_intensity)
+    print(f"  強度平均 (mean): {near_metrics['mean']:.1f}")
+    print(f"  相對距離 (1/√I): {near_metrics['relative_distance']:.4f}")
     
     # 設定校準基準
     print("\n=== 校準測試 ===")

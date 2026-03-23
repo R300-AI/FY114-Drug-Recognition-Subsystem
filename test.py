@@ -138,11 +138,11 @@ def test_drawer() -> bool:
         analyzer = DepthAnalyzer()
         gray = frame[:, :, 0]  # Use first channel as grayscale
         
-        metrics = analyzer.calculate_depth_metrics(gray, use_transform=True)
-        log(f"  ↳ Depth metrics: mean={metrics['mean']:.4f}, std={metrics['std']:.4f}")
-        
-        if not (0.0 <= metrics['mean'] <= 1.0):
-            log(f"  ↳ Depth metric out of valid range [0, 1]: {metrics['mean']}")
+        metrics = analyzer.calculate_depth_metrics(gray)
+        log(f"  ↳ Depth metrics: mean={metrics['mean']:.1f}, std={metrics['std']:.2f}")
+
+        if not (0 <= metrics['mean'] <= 255):
+            log(f"  ↳ Intensity out of valid range [0, 255]: {metrics['mean']}")
             return False
         
         log("  ↳ DepthAnalyzer ✓")
@@ -150,9 +150,8 @@ def test_drawer() -> bool:
         # Test DrawerStateDetector
         log("  ↳ Testing DrawerStateDetector...")
         detector = DrawerStateDetector(
-            threshold_open=0.08,
-            threshold_closed=0.06,
-            filter_window=5,
+            threshold_open=80,
+            threshold_closed=150,
             min_state_duration=3
         )
         

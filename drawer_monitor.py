@@ -2,7 +2,7 @@
 抽屜閉合監測應用程式 - 生產版本
 
 特性:
-- 物理層/顯示層分離架構
+- intensity (0-255) + SMA(N) 統一平滑架構
 - 所有配置從 YAML 讀取,無硬編碼
 - 視窗大小: 1024x600
 - Tab 切換: 數據串流頁面 和 參數配置頁面
@@ -96,6 +96,7 @@ class DrawerMonitorApp:
         self.cap = None
         self.is_running = False
         self.capture_thread = None
+        self._ui_update_pending = False  # 防止 UI 更新積壓
         
         # 數據存儲
         self.max_history = 500
@@ -260,11 +261,11 @@ class DrawerMonitorApp:
         self.ax1.grid(True, alpha=0.3)
         self.ax1.tick_params(labelsize=8)
         
-        # 下圖：原始強度
+        # 下圖：相對距離（1/√intensity，與 ax1 方向相反）
         self.ax2 = self.fig.add_subplot(212)
         self.ax2.set_xlabel('Time (seconds)', fontsize=9)
-        self.ax2.set_ylabel('Intensity', fontsize=9)
-        self.ax2.set_title('Reflection Light Intensity', fontsize=10)
+        self.ax2.set_ylabel('Relative Distance (1/√I)', fontsize=9)
+        self.ax2.set_title('Relative Distance: High=Far/Open, Low=Near/Closed', fontsize=10)
         self.ax2.grid(True, alpha=0.3)
         self.ax2.tick_params(labelsize=8)
         
@@ -375,8 +376,8 @@ class DrawerMonitorApp:
         
         # === 第二列：分析參數 + 配置管理 ===
         
-        # 分析參數（物理层 - 最簡化）
-        analysis_frame = ttk.LabelFrame(container, text="分析参数(物理层)", padding=15)
+        # 分析參數
+        analysis_frame = ttk.LabelFrame(container, text="分析參數", padding=15)
         analysis_frame.grid(row=0, column=1, sticky=(tk.N, tk.W, tk.E), padx=5, pady=5)
         
         ttk.Label(analysis_frame, 
@@ -404,14 +405,14 @@ class DrawerMonitorApp:
         display_frame = ttk.LabelFrame(container, text="显示参数 & 配置管理", padding=15)
         display_frame.grid(row=1, column=1, sticky=(tk.N, tk.W, tk.E), padx=5, pady=5)
         
-        # 启用MA平滑开关
+        # 啟用 SMA 平滑開關
         self.enable_smoothing_var = tk.BooleanVar(
             value=self.config['display'].get('enable_smoothing', True))
-        ttk.Checkbutton(display_frame, text="启用 Moving Average 平滑",
+        ttk.Checkbutton(display_frame, text="啟用 SMA (Simple Moving Average) 平滑",
                         variable=self.enable_smoothing_var
                         ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=3)
-        
-        ttk.Label(display_frame, text="平滑窗口大小 (1-30):", font=('Arial', 9)
+
+        ttk.Label(display_frame, text="SMA 視窗大小 N (1-30):", font=('Arial', 9)
                   ).grid(row=1, column=0, sticky=tk.W, pady=3)
         self.smoothing_window_var = tk.IntVar(
             value=self.config['display']['smoothing_window'])
@@ -426,7 +427,7 @@ class DrawerMonitorApp:
                         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=3)
         
         ttk.Label(display_frame,
-                  text="💡 关闭平滑可确认原始数据质量",
+                  text="💡 SMA(N)：取最近 N 幀算術平均（等同股票 N 日均線）\n   同時作用於圖表顯示與狀態判斷",
                   font=('Arial', 8), foreground='#0066cc', justify=tk.LEFT
                   ).grid(row=3, column=0, columnspan=2, pady=5)
         
@@ -540,7 +541,7 @@ class DrawerMonitorApp:
                 pid=self.config['camera']['pid']
             )
             
-            # 初始化状态侦测器（基于物理数据，不做复杂滤波）
+            # 初始化狀態偵測器
             self.state_detector = DrawerStateDetector(
                 threshold_open=self.config['thresholds']['open'],
                 threshold_closed=self.config['thresholds']['closed'],
@@ -612,22 +613,33 @@ class DrawerMonitorApp:
                 # 計算深度指標
                 metrics = self.depth_analyzer.calculate_depth_metrics(roi)
 
-                depth_metric = metrics['mean']            # intensity_mean (0-255)
+                depth_metric = metrics['mean']            # intensity_mean (0-255) 原始值
                 relative_dist = metrics['relative_distance']  # 1/√intensity，正比於相對距離
 
-                # 狀態判斷
-                if self.state_detector:
-                    drawer_status = self.state_detector.update(depth_metric)
-                else:
-                    drawer_status = "未知"
-
-                # 更新數據
+                # 先存入 deque，再取 SMA 用於狀態判斷
                 self.time_data.append(current_time)
                 self.depth_metric_data.append(depth_metric)
                 self.relative_dist_data.append(relative_dist)
 
-                # 更新 UI
-                self.root.after(0, self.update_ui, frame, drawer_status, depth_metric)
+                # SMA 平滑後的值用於狀態判斷（與圖表顯示使用相同演算法）
+                sma_n = self.config['display']['smoothing_window']
+                enable_sma = self.config['display'].get('enable_smoothing', True)
+                if enable_sma:
+                    recent = list(self.depth_metric_data)[-sma_n:]
+                    smoothed_for_state = sum(recent) / len(recent)
+                else:
+                    smoothed_for_state = depth_metric
+
+                # 狀態判斷（使用 SMA 平滑後的 intensity）
+                if self.state_detector:
+                    drawer_status = self.state_detector.update(smoothed_for_state)
+                else:
+                    drawer_status = "未知"
+
+                # 更新 UI（若前一次 UI 更新尚未完成則跳過，防止積壓）
+                if not self._ui_update_pending:
+                    self._ui_update_pending = True
+                    self.root.after(0, self.update_ui, frame, drawer_status, depth_metric)
             else:
                 consecutive_failures += 1
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
@@ -673,13 +685,16 @@ class DrawerMonitorApp:
         
         # 更新圖表
         self.update_chart()
-    
+
+        # 清除 pending 標誌，允許下一次 UI 更新排隊
+        self._ui_update_pending = False
+
     def update_chart(self):
-        """更新圖表（显示层平滑处理）"""
+        """更新圖表（SMA 平滑顯示，與狀態判斷使用相同演算法）"""
         if len(self.time_data) < 2:
             return
         
-        # 上圖：深度指標（应用显示层平滑）
+        # 上圖：SMA 平滑後的 intensity (0-255)
         self.ax1.clear()
         
         # 获取平滑参数
@@ -687,28 +702,28 @@ class DrawerMonitorApp:
         show_raw = self.config['display']['show_raw_data']
         enable_smoothing = self.config['display'].get('enable_smoothing', True)
         
-        # 原始数据（物理层）
+        # 原始 intensity 數據
         raw_data = list(self.depth_metric_data)
         time_data = list(self.time_data)
         
-        # 根据开关决定是否应用移动平均平滑
+        # 根據開關決定是否套用 SMA
         if enable_smoothing:
             smoothed_data = moving_average(raw_data, smoothing_window)
             display_data = smoothed_data
-            label_suffix = f' (MA W={smoothing_window})'
+            label_suffix = f' SMA(N={smoothing_window})'
         else:
             display_data = raw_data
             label_suffix = ' (Raw)'
-        
-        # 绘制数据
+
+        # 繪製數據
         if show_raw and enable_smoothing:
-            # 同时显示原始数据和平滑数据
+            # 同時顯示原始數據和 SMA 平滑數據
             self.ax1.plot(time_data, raw_data,
-                          'b-', linewidth=1, alpha=0.3, label='Raw Data')
+                          'b-', linewidth=1, alpha=0.3, label='Raw Intensity')
             self.ax1.plot(time_data, display_data,
-                          'b-', linewidth=2, label=f'Smoothed (W={smoothing_window})')
+                          'b-', linewidth=2, label=f'SMA(N={smoothing_window})')
         else:
-            # 只显示主数据
+            # 只顯示主數據
             self.ax1.plot(time_data, display_data,
                           'b-', linewidth=2, label=f'Intensity{label_suffix}')
         
@@ -726,8 +741,9 @@ class DrawerMonitorApp:
         
         self.ax1.set_ylabel('Intensity (0-255)', fontsize=9)
         self.ax1.set_ylim(0, 255)  # 固定y軸範圍為0-255（強度值）
-        smoothing_status = 'Smoothed' if self.config['display'].get('enable_smoothing', True) else 'Raw'
-        title = f'Drawer Intensity ({smoothing_status})'
+        n = self.config['display']['smoothing_window']
+        smoothing_status = f'SMA(N={n})' if self.config['display'].get('enable_smoothing', True) else 'Raw'
+        title = f'Drawer Intensity ({smoothing_status}) — High=Near/Closed, Low=Far/Open'
         self.ax1.set_title(title, fontsize=10)
         self.ax1.legend(loc='upper right', fontsize=8)
         self.ax1.grid(True, alpha=0.3)
@@ -973,10 +989,10 @@ class DrawerMonitorApp:
             self.threshold_closed_slider.set(self.config['thresholds']['closed'])
             self.threshold_open_slider.set(self.config['thresholds']['open'])
             
-            # 更新分析參數（物理层）
+            # 更新分析參數
             self.min_state_duration_var.set(self.config['analysis']['min_state_duration'])
-            
-            # 更新显示参数（显示层）
+
+            # 更新顯示參數
             self.smoothing_window_var.set(self.config['display']['smoothing_window'])
             self.show_raw_data_var.set(self.config['display']['show_raw_data'])
             self.enable_smoothing_var.set(self.config['display'].get('enable_smoothing', True))

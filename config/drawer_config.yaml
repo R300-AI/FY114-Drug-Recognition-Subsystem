@@ -17,6 +17,6 @@ analysis:
   min_state_duration: 5
   history_size: 500
 display:
-  smoothing_window: 10
-  show_raw_data: false
+  smoothing_window: 36
+  show_raw_data: true
   enable_smoothing: true

@@ -1,6 +1,6 @@
 # Drawer Monitor 配置範例
 # 路徑：config/drawer_config.yaml
-# 說明：物理层/显示层分离架构配置
+# 說明：v2.0 架構 — intensity (0-255) + SMA(N) + min_state_duration
 
 camera:
   frame_rate: QUARTER        # 幀率 (FULL/HALF/QUARTER/EIGHTH/SIXTEENTH)
@@ -11,67 +11,67 @@ camera:
 
 roi:
   enabled: true              # 啟用 ROI（建議：只監測關鍵區域）
-  x1: 40                     # 左上角 X 座標
-  y1: 40                     # 左上角 Y 座標
-  x2: 120                    # 右下角 X 座標
-  y2: 120                    # 右下角 Y 座標
+  x1: 40                     # 左上角 X 座標 (0-159)
+  y1: 40                     # 左上角 Y 座標 (0-159)
+  x2: 120                    # 右下角 X 座標 (0-159, > x1)
+  y2: 120                    # 右下角 Y 座標 (0-159, > y1)
 
 thresholds:
-  open: 0.08                 # 開啟閾值（depth_metric > 0.08 為完全開啟）
-  closed: 0.06               # 閉合閾值（depth_metric < 0.06 為完全閉合）
+  open: 80                   # 開啟閾值 (intensity ≤ 此值 → 完全開啟)
+  closed: 150                # 閉合閾值 (intensity > 此值 → 完全閉合)
+                             # 必須滿足：closed > open，建議間距 ≥ 20
+                             # 中間為「閉合中」過渡區
 
-# ===== 分析参数（物理层）=====
+# ===== 分析參數 =====
 analysis:
-  use_depth_transform: true           # 使用物理模型深度轉換（1/√intensity）
-                                      # 推薦啟用：反映真實距離關係
-  
-  min_state_duration: 5               # 狀態持續幀數 (3-15)
-                                      # 新狀態需持續此幀數才確認變更
-                                      # 推薦：5（約 0.6 秒，防止瞬間抖动）
-                                      # 物理层：只做基本状态确认，不做复杂滤波
-  
-  history_size: 500                   # 時間序列歷史保存幀數
+  min_state_duration: 5      # 狀態持續幀數 (3-15)
+                             # 新狀態需連續持續此幀數才確認變更（防抖）
+                             # 預設 5（8 FPS 下約 0.6 秒）
+  history_size: 500          # 時間序列歷史保存幀數
 
-# ===== 显示参数（显示层平滑）=====
+# ===== 顯示參數 =====
 display:
-  smoothing_window: 10                # 移动平均窗口大小 (1-30)
-                                      # 值越大图表越平滑，但响应越慢
-                                      # 推薦：10-15（約 1-2 秒平滑，有效抑制噪声）
-                                      # 针对0.5秒周期噪声：推荐15
-  
-  show_raw_data: false                # 同时显示原始数据曲线
-                                      # true: 显示原始+平滑两条曲线
-                                      # false: 只显示平滑曲线
+  smoothing_window: 10       # SMA 視窗大小 N (1-30)
+                             # SMA(N) 同時作用於圖表顯示與狀態判斷
+                             # N=5  → 快速響應（0.6s，低噪聲環境）
+                             # N=10 → 平衡預設（1.2s，一般環境）
+                             # N=15 → 高穩定（1.9s，高噪聲環境）
+  show_raw_data: false       # 同時顯示原始未平滑曲線（灰色）
+  enable_smoothing: true     # 啟用 SMA 平滑（false 則使用原始 intensity）
 
-# ===== 架构说明 =====
+# ===== 架構說明 =====
 #
-# 物理层（DrawerStateDetector）：
-#   - 基于原始物理数据直接判断
-#   - 只使用阈值比较 + 基本状态持续确认
-#   - 不做复杂的滤波处理
-#   - 保证数据的物理意义
+# 訊號流程：
+#   原始 intensity_mean (0-255)
+#       ↓
+#   [SMA(N)] 取最近 N 幀算術平均
+#       ↓
+#   平滑後的 intensity 值
+#       ↓
+#   [閾值比較]
+#     intensity > threshold_closed → 完全閉合
+#     threshold_open < intensity ≤ threshold_closed → 閉合中
+#     intensity ≤ threshold_open → 完全開啟
+#       ↓
+#   [防抖] 需連續 min_state_duration 幀才確認狀態變更
 #
-# 显示层（Time Series Chart）：
-#   - 在时间序列图表上应用移动平均平滑
-#   - 提升视觉效果，降低噪声干扰
-#   - 不影响物理层的状态判断
-#   - 可选显示原始数据作为对比
+# 響應延遲 ≈ N / FPS（例：N=10, FPS=8 → 約 1.25 秒）
 #
-# ===== 调优建议 =====
+# ===== 調校建議 =====
 #
-# 低噪声环境（标准距离）：
-#   min_state_duration: 3-5
-#   smoothing_window: 5-10
-#   响应时间：0.4-1.0 秒
+# 方案 A：快速響應（信號乾淨）
+#   smoothing_window: 5
+#   min_state_duration: 4
+#   響應時間：約 0.6 秒
 #
-# 高噪声环境（近距离或0.5秒周期噪声）：
-#   min_state_duration: 8-10
-#   smoothing_window: 15-20
-#   响应时间：1.0-2.0 秒
+# 方案 B：平衡（預設，推薦）
+#   smoothing_window: 10
+#   min_state_duration: 5
+#   響應時間：約 1.2 秒
 #
-# 方案 C：超穩定（極端噪聲）
-#   filter_window: 15, min_state_duration: 10, ema_alpha: 0.2
-#   state_lock_frames: 20, use_median_filter: true
-#   響應時間：1.8-2.0 秒，穩定性：極高，誤報率：幾乎為零
+# 方案 C：高穩定（噪聲大）
+#   smoothing_window: 15
+#   min_state_duration: 8
+#   響應時間：約 1.9 秒
 #
 # 詳細調校指南：docs/FILTER_TUNING_GUIDE.md
