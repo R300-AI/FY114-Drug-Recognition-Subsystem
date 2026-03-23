@@ -27,7 +27,6 @@ import cv2
 import numpy as np
 import requests
 from PIL import Image, ImageTk
-import yaml
 
 # LED Ring（選配，僅 Raspberry Pi）
 try:
@@ -250,6 +249,7 @@ class App:
             return
 
         try:
+            import yaml
             from utils.depth_analysis import DepthAnalyzer, DrawerStateDetector
             from eminent.sensors.vision2p5d import VideoCapture, MN96100CConfig
 
@@ -270,6 +270,40 @@ class App:
             if not self._drawer_cap.isOpened():
                 raise RuntimeError("MN96100C not opened")
 
+            # ── 根據上次 log 時間決定暖機秒數 ──
+            # 每距上次關閉 30 秒 → +1 秒暖機，上限 10 秒
+            log_path = Path("logs/drawer_state.log")
+            warmup_secs = 10  # 預設（首次啟動 / log 讀取失敗）
+            if log_path.exists():
+                try:
+                    lines = log_path.read_text(encoding='utf-8').splitlines()
+                    last = next((l for l in reversed(lines) if l.strip()), None)
+                    if last:
+                        last_time = datetime.strptime(last.split('  ')[0].strip(),
+                                                      "%Y-%m-%d %H:%M:%S")
+                        diff = (datetime.now() - last_time).total_seconds()
+                        warmup_secs = min(10, int(diff // 30))
+                        print(f"[drawer] 距上次關閉 {diff:.0f}s → 暖機 {warmup_secs}s")
+                    else:
+                        print(f"[drawer] log 為空 → 暖機 {warmup_secs}s")
+                except Exception as ex:
+                    print(f"[drawer] 無法解析上次 log（{ex}）→ 暖機 {warmup_secs}s")
+            else:
+                print(f"[drawer] 首次啟動，無 log → 暖機 {warmup_secs}s")
+
+            # ── 暖機倒數（UI + terminal）──
+            if warmup_secs > 0:
+                for i in range(warmup_secs):
+                    msg = f"感測器暖機 {i + 1}/{warmup_secs}"
+                    print(f"[drawer] {msg}")
+                    self.badge_label.config(text=msg)
+                    self.root.update()
+                    time.sleep(1)
+                self.badge_label.config(text="待分析")
+                self.root.update()
+            else:
+                print("[drawer] 暖機跳過（距上次關閉時間短）")
+
             self._drawer_analyzer = DepthAnalyzer()
             self._drawer_detector = DrawerStateDetector(
                 threshold_open=cfg['thresholds']['open'],
@@ -277,17 +311,16 @@ class App:
                 min_state_duration=cfg['analysis']['min_state_duration'],
             )
 
-            # 建立狀態 log（每次啟動清空）
-            log_path = Path("logs/drawer_state.log")
+            # ── 重製 log（暖機後才清空，確保下次能讀到本次最後時間）──
             log_path.parent.mkdir(parents=True, exist_ok=True)
             self._drawer_logger = logging.getLogger("drawer.state")
             self._drawer_logger.setLevel(logging.DEBUG)
             self._drawer_logger.propagate = False
-            if not self._drawer_logger.handlers:
-                handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
-                handler.setFormatter(logging.Formatter('%(asctime)s  %(message)s',
-                                                        datefmt='%H:%M:%S'))
-                self._drawer_logger.addHandler(handler)
+            self._drawer_logger.handlers.clear()
+            handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+            handler.setFormatter(logging.Formatter('%(asctime)s  %(message)s',
+                                                    datefmt='%Y-%m-%d %H:%M:%S'))
+            self._drawer_logger.addHandler(handler)
 
             self._start_drawer_monitoring()
             print("[drawer] MN96100C ready, monitoring started")
@@ -372,7 +405,12 @@ class App:
                 log_line = f"[drawer] state={state:<6}  intensity={smoothed:6.1f}"
                 print(log_line, flush=True)
                 if self._drawer_logger:
-                    self._drawer_logger.info(f"state={state}  intensity={smoothed:.1f}")
+                    open_th   = self._drawer_detector.threshold_open
+                    closed_th = self._drawer_detector.threshold_closed
+                    self._drawer_logger.info(
+                        f"state={state}  intensity={smoothed:.1f}"
+                        f"  threshold_open={open_th}  threshold_closed={closed_th}"
+                    )
 
                 if not self._drawer_triggered:
                     # 等待連續閉合 → 觸發分析
@@ -1277,6 +1315,7 @@ class App:
     # --------------------------------------------------------
 
     def _save_results(self):
+        import yaml
         RECORDS_DIR.mkdir(parents=True, exist_ok=True)
         tray_id = self.state.tray_id or datetime.now().strftime("%Y%m%d_%H%M%S")
 
