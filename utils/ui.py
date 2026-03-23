@@ -42,7 +42,8 @@ from .types import Detection, MatchResult
 # 常數
 # ============================================================
 
-RECORDS_DIR = Path("records")
+RECORDS_DIR    = Path("records")
+DRAWER_LOG     = Path("logs/drawer_state.log")
 
 # 每種藥品的配色（邊框色、背景色、YOLO覆蓋BGR）
 DRUG_COLORS = [
@@ -282,13 +283,13 @@ class App:
                 min_state_duration=cfg['analysis']['min_state_duration'],
             )
 
-            # ── 重製 log（暖機後才清空，確保下次能讀到本次最後時間）──
-            log_path.parent.mkdir(parents=True, exist_ok=True)
+            # ── 建立 / 重製 drawer state log ──
+            DRAWER_LOG.parent.mkdir(parents=True, exist_ok=True)
             self._drawer_logger = logging.getLogger("drawer.state")
             self._drawer_logger.setLevel(logging.DEBUG)
             self._drawer_logger.propagate = False
             self._drawer_logger.handlers.clear()
-            handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+            handler = logging.FileHandler(DRAWER_LOG, mode='w', encoding='utf-8')
             handler.setFormatter(logging.Formatter('%(asctime)s  %(message)s',
                                                     datefmt='%Y-%m-%d %H:%M:%S'))
             self._drawer_logger.addHandler(handler)
