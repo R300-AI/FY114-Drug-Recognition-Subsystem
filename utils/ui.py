@@ -16,6 +16,7 @@ import re
 import time
 import threading
 import tkinter as tk
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -159,6 +160,18 @@ class App:
         self.led_pixels = None
         self._init_led()
 
+        # --- 抽屜感測器 ---
+        self._drawer_cap              = None
+        self._drawer_analyzer         = None
+        self._drawer_detector         = None
+        self._drawer_cfg              = {}
+        self._drawer_history          = deque(maxlen=500)
+        self._drawer_running          = False
+        self._drawer_thread           = None
+        self._drawer_consecutive_closed = 0   # 連續「完全閉合」次數
+        self._drawer_triggered        = False  # True = 已觸發分析，等待開啟後才可再觸發
+        self._drawer_close_threshold  = 5      # 預設值，init 時從 config 覆寫
+
         # --- 視窗 ---
         self.root.title("AI藥品輔助辨識")
         self.root.configure(bg=COLOR_BG)
@@ -173,6 +186,7 @@ class App:
 
         # --- 初始化（不啟動串流）---
         self._init_camera()
+        self._init_drawer_sensor()
         self._update_tray_id()
         self._reset_state()   # 確保 UI 為 IDLE 狀態
 
@@ -221,6 +235,137 @@ class App:
                 cap.release()
                 self._camera = None
                 print("[camera] Warning: no camera available")
+
+    # --------------------------------------------------------
+    # 抽屜感測器
+    # --------------------------------------------------------
+
+    def _init_drawer_sensor(self):
+        if self._debug:
+            print("[drawer] Debug mode: sensor skipped — press Space to simulate close")
+            self.root.bind("<space>", lambda e: self._on_drawer_closed())
+            return
+
+        cfg_path = Path("config/drawer_config.yaml")
+        if not cfg_path.exists():
+            print("[drawer] drawer_config.yaml not found — auto-trigger disabled")
+            return
+
+        try:
+            from utils.depth_analysis import DepthAnalyzer, DrawerStateDetector
+            from eminent.sensors.vision2p5d import VideoCapture, MN96100CConfig
+
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+            self._drawer_cfg = cfg
+            self._drawer_close_threshold = cfg['analysis'].get('min_state_duration', 5)
+
+            self._drawer_cap = VideoCapture(
+                vid=cfg['camera']['vid'],
+                pid=cfg['camera']['pid'],
+                frame_rate=getattr(MN96100CConfig.FrameRate,
+                                   cfg['camera']['frame_rate']),
+                led_current=getattr(MN96100CConfig.LEDCurrent,
+                                    cfg['camera']['led_current']),
+                exposure_setting=getattr(MN96100CConfig.ExposureSetting,
+                                         cfg['camera'].get('exposure_setting', 'DEFAULT')),
+            )
+            if not self._drawer_cap.isOpened():
+                raise RuntimeError("MN96100C not opened")
+
+            self._drawer_analyzer = DepthAnalyzer()
+            self._drawer_detector = DrawerStateDetector(
+                threshold_open=cfg['thresholds']['open'],
+                threshold_closed=cfg['thresholds']['closed'],
+                min_state_duration=cfg['analysis']['min_state_duration'],
+            )
+
+            self._start_drawer_monitoring()
+            print("[drawer] MN96100C ready, monitoring started")
+
+        except Exception as e:
+            print(f"[drawer] Init failed: {e} — auto-trigger disabled")
+            self._drawer_cap = None
+
+    def _start_drawer_monitoring(self):
+        self._drawer_running = True
+        self._drawer_thread = threading.Thread(
+            target=self._drawer_capture_loop, daemon=True)
+        self._drawer_thread.start()
+
+    def _stop_drawer_monitoring(self):
+        self._drawer_running = False
+        if self._drawer_thread:
+            self._drawer_thread.join(timeout=2.0)
+        if self._drawer_cap:
+            try:
+                self._drawer_cap.release()
+            except Exception:
+                pass
+
+    def _drawer_capture_loop(self):
+        MAX_FAILURES = 30
+        consecutive_failures = 0
+
+        while self._drawer_running:
+            try:
+                ret, frame = self._drawer_cap.read()
+            except Exception:
+                ret, frame = False, None
+
+            if not ret or frame is None:
+                consecutive_failures += 1
+                if consecutive_failures >= MAX_FAILURES:
+                    print("[drawer] Sensor disconnected")
+                    break
+                time.sleep(0.1)
+                continue
+
+            consecutive_failures = 0
+
+            try:
+                gray = (cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        if frame.ndim == 3 else frame)
+
+                roi = self._drawer_cfg.get('roi', {})
+                if roi.get('enabled', False):
+                    gray = gray[roi['y1']:roi['y2'], roi['x1']:roi['x2']]
+
+                metrics = self._drawer_analyzer.calculate_depth_metrics(gray)
+                self._drawer_history.append(metrics['mean'])
+
+                # MAX 平滑（與 drawer_monitor 一致）
+                n = self._drawer_cfg['display']['smoothing_window']
+                enable = self._drawer_cfg['display'].get('enable_smoothing', True)
+                if enable:
+                    recent = list(self._drawer_history)[-n:]
+                    smoothed = max(recent)
+                else:
+                    smoothed = metrics['mean']
+
+                state = self._drawer_detector.update(smoothed)
+
+                if not self._drawer_triggered:
+                    # 等待連續閉合 → 觸發分析
+                    if state == "完全閉合":
+                        self._drawer_consecutive_closed += 1
+                        if self._drawer_consecutive_closed >= self._drawer_close_threshold:
+                            self._drawer_triggered = True
+                            self._drawer_consecutive_closed = 0
+                            self.root.after(0, self._on_drawer_closed)
+                    else:
+                        self._drawer_consecutive_closed = 0
+                else:
+                    # 已觸發，等待抽屜完全開啟後才解鎖
+                    if state == "完全開啟":
+                        self._drawer_triggered = False
+                        self._drawer_consecutive_closed = 0
+
+            except Exception as e:
+                print(f"[drawer] Loop error: {e}")
+
+    def _on_drawer_closed(self):
+        """抽屜閉合事件（UI 執行緒）"""
+        self._on_analyse()
 
     def _capture_single_frame(self) -> np.ndarray | None:
         """短暫啟動相機，拍攝一幀後立即停止。回傳 BGR (H,W,3) 或 None"""
@@ -312,14 +457,6 @@ class App:
             relief=tk.FLAT, command=self._on_done,
         )
         self.done_btn.pack(side=tk.RIGHT, padx=(4, 14), pady=8)
-
-        # 分析按鈕（右側）
-        self.analyse_btn = tk.Button(
-            topbar, text="分析", font=FONT_BTN, width=7,
-            bg=COLOR_PRIMARY, fg="white",
-            relief=tk.FLAT, command=self._on_analyse,
-        )
-        self.analyse_btn.pack(side=tk.RIGHT, padx=4, pady=8)
 
     def _build_content(self):
         content = tk.Frame(self.root, bg=COLOR_BG)
@@ -575,8 +712,10 @@ class App:
         return detections
 
     def _on_analyse(self):
-        """分析按鈕：拍照 → 偵測 → 編碼 → 比對 → 更新 UI"""
-        self.analyse_btn.config(state=tk.DISABLED, bg="#aaa")
+        """抽屜閉合觸發：拍照 → 偵測 → 編碼 → 比對 → 更新 UI"""
+        if self._is_analysed:
+            return   # 正在 REVIEWING 中，忽略重複觸發
+
         self.root.update_idletasks()
 
         # 拍攝
@@ -585,7 +724,6 @@ class App:
         if frame is None:
             print("[analyse] Capture failed")
             self._show_info_modal("提示", "相機拍攝失敗，請確認相機連接狀態。")
-            self.analyse_btn.config(state=tk.NORMAL, bg=COLOR_PRIMARY)
             return
 
         self._captured_image = frame.copy()
@@ -622,7 +760,6 @@ class App:
             self._switch_tab("cam")
             self._refresh_image()
             self._show_info_modal("提示", "未偵測到任何藥錠，請確認藥盤擺放位置與光線條件。")
-            self.analyse_btn.config(state=tk.NORMAL, bg=COLOR_PRIMARY)
             return
 
         # 先更新狀態（pills 含 color_idx），再用 pills 配色繪 overlay
@@ -1159,7 +1296,6 @@ class App:
         self._clear_highlights()
         self.drug_frame.config(highlightbackground="#ffdd55", bg=COLOR_BG)
 
-        self.analyse_btn.config(state=tk.NORMAL, bg=COLOR_PRIMARY)
         self.done_btn.config(state=tk.DISABLED, bg="#bbb")
 
     # --------------------------------------------------------
@@ -1167,6 +1303,7 @@ class App:
     # --------------------------------------------------------
 
     def _on_close(self):
+        self._stop_drawer_monitoring()
         if self.led_pixels:
             try:
                 self.led_pixels.fill((0, 0, 0))
