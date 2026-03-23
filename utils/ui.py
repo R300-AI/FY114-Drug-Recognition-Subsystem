@@ -355,6 +355,7 @@ class App:
                         self._drawer_consecutive_opened = 0
                         self._drawer_consecutive_closed = 0
                         print("[drawer] 抽屜開啟確認，開始監控閉合", flush=True)
+                        self.root.after(0, self._update_badge)
                 else:
                     self._drawer_consecutive_opened = 0
 
@@ -380,6 +381,7 @@ class App:
                         self._drawer_consecutive_closed = 0
                         print("[drawer] 抽屜重新開啟，準備下次觸發", flush=True)
                         self.root.after(0, self._reset_state)
+                        # _reset_state 內部會呼叫 _update_badge，顯示「請關閉抽屜」
                 else:
                     self._drawer_consecutive_opened = 0
 
@@ -617,7 +619,8 @@ class App:
         if self.current_tab == "cam":
             self.tab_cam.config(bg="#e6e6e6", relief=tk.SUNKEN)
             self.tab_ai.config(bg="#bfbfbf", relief=tk.FLAT)
-            self.badge_label.config(text="鏡頭" if self._is_analysed else "待分析")
+            if self._is_analysed:
+                self.badge_label.config(text="鏡頭")
         else:
             self.tab_cam.config(bg="#bfbfbf", relief=tk.FLAT)
             self.tab_ai.config(bg="#e6e6e6", relief=tk.SUNKEN)
@@ -758,8 +761,28 @@ class App:
 
         return detections, results
 
+    def _update_badge(self):
+        """依抽屜狀態機與分析狀態決定左上角引導文字（主執行緒呼叫）"""
+        if self._is_analysed:
+            # 分析完成後由 _update_tab_buttons 決定顯示 鏡頭/AI
+            self._update_tab_buttons()
+            return
+        sm = self._drawer_sm_state
+        if self._drawer_cap is None and not self._debug:
+            text = "感測器未連線"
+        elif sm == "WAIT_OPEN":
+            text = "請拉開抽屜放入藥盤"
+        elif sm == "WAIT_CLOSE":
+            text = "請關閉抽屜"
+        elif sm == "ANALYSING":
+            # 分析失敗後仍在此狀態，引導使用者重拉抽屜
+            text = "請重新拉開抽屜"
+        else:
+            text = "待分析"
+        self.badge_label.config(text=text)
+
     def _set_status(self, text: str):
-        """更新 badge 狀態文字並強制重繪（主執行緒阻塞期間也能即時顯示）"""
+        """暫時覆寫 badge（拍攝/辨識進行中），強制重繪"""
         self.badge_label.config(text=text)
         self.root.update_idletasks()
 
@@ -773,7 +796,7 @@ class App:
         frame = self._capture_single_frame()
         if frame is None:
             print("[analyse] Capture failed")
-            self._set_status("待分析")
+            self._update_badge()
             self._show_info_modal("提示", "相機拍攝失敗，請確認相機連接狀態。")
             return
 
@@ -789,13 +812,13 @@ class App:
                 detections, results = self._call_api(frame)
         except requests.exceptions.ConnectionError:
             print("[analyse] API connection failed")
-            self._set_status("待分析")
+            self._update_badge()
             self._show_info_modal(
                 "連線錯誤", f"無法連線至推論伺服器 {self._api_url}\n請確認 api.py 已啟動。")
             return
         except Exception as e:
             print(f"[analyse] Error: {e}")
-            self._set_status("待分析")
+            self._update_badge()
             self._show_info_modal("辨識錯誤", f"推論過程發生錯誤：{e}")
             return
 
@@ -1314,7 +1337,7 @@ class App:
         self._update_tab_buttons()
         self.image_label.config(image="", bg="#000")
         self.image_label.image = None
-        self.badge_label.config(text="待分析")
+        self._update_badge()
 
         self.variety_num.config(text="0")
         self.total_num.config(text="0")
