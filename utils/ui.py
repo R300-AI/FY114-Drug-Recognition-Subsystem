@@ -96,6 +96,14 @@ class VerificationState:
     current_page: int = 0
     name_answers: list[bool | None] = field(default_factory=list)  # per detection
     dose_answers: list[bool | None] = field(default_factory=list)  # per detection
+    
+    def set_defaults(self, default_correct: bool | None = True):
+        """設定預設的驗證狀態（可選擇預設為正確、錯誤或未選）"""
+        self.variety_correct = default_correct
+        self.total_correct = default_correct
+        if self.pills:
+            self.name_answers = [default_correct] * len(self.pills)
+            self.dose_answers = [default_correct] * len(self.pills)
 
 
 # ============================================================
@@ -130,13 +138,16 @@ class App:
         api_url: str = "http://localhost:5000",
         fullscreen: bool = False,
         debug: bool = False,
+        default_verification: bool | None = True,
     ):
         self.root    = root
         self._api_url = api_url.rstrip("/")
         self._debug  = debug
+        self._default_verification = default_verification  # 預設驗證狀態（True=正確, False=錯誤, None=未選）
 
         # --- 狀態 ---
         self.state = VerificationState()
+        self.state.set_defaults(self._default_verification)  # 套用預設值
         self.current_tab: str = "cam"         # "cam" | "ai"
         self._captured_image: np.ndarray | None = None   # 拍攝原圖
         self._ai_image: np.ndarray | None = None          # YOLO 疊加圖（動態更新）
@@ -960,12 +971,11 @@ class App:
         self.state.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.state.variety_count = len(unique_licenses)
         self.state.total_count = len(pills)
-        self.state.variety_correct = None
-        self.state.total_correct = None
         self.state.pills = pills
         self.state.current_page = 0
-        self.state.name_answers = [None] * len(pills)
-        self.state.dose_answers = [None] * len(pills)
+        
+        # 套用預設驗證狀態
+        self.state.set_defaults(self._default_verification)
 
     # --------------------------------------------------------
     # 資訊面板更新
@@ -1335,6 +1345,7 @@ class App:
         self._is_analysed = False
 
         self.state = VerificationState()
+        self.state.set_defaults(self._default_verification)  # 重置時也套用預設值
         self._update_tray_id()
 
         self.current_tab = "cam"

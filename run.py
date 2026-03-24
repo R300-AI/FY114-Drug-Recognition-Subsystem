@@ -23,6 +23,12 @@ def main():
                         help="推論 API 伺服器位址（預設：http://localhost:5000）")
     parser.add_argument("--debug", action="store_true",
                         help="除錯模式：跳過相機、感測器與 API，以樣本圖作為測試輸入")
+    parser.add_argument("--default-correct", dest="default_correct", 
+                        action="store_true", default=True,
+                        help="預設辨識結果為正確（預設：啟用）")
+    parser.add_argument("--no-default-correct", dest="default_correct", 
+                        action="store_false",
+                        help="不預設辨識結果為正確（需使用者手動選擇）")
     args = parser.parse_args()
 
     if args.debug:
@@ -30,9 +36,11 @@ def main():
     else:
         print(f"[init] API endpoint: {args.api}")
 
+    print(f"[init] Default verification: {'Correct' if args.default_correct else 'Not selected'}")
     print("[init] Starting GUI...")
     root = tk.Tk()
-    App(root, api_url=args.api, fullscreen=args.fullscreen, debug=args.debug)
+    App(root, api_url=args.api, fullscreen=args.fullscreen, debug=args.debug,
+        default_verification=True if args.default_correct else None)
     root.mainloop()
 
 
