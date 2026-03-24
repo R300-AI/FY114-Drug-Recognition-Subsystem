@@ -16,7 +16,7 @@ thresholds:
 analysis:
   min_state_duration: 5
   min_open_duration: 3
-  min_close_duration: 5
+  min_close_duration: 8
   history_size: 500
 display:
   smoothing_window: 8
