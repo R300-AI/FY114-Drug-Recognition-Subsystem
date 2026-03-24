@@ -170,13 +170,7 @@ class ExcelWriter:
         # TODO: 確認 J 欄的實際意義
         self.sheet.cell(row, 10, self._bool_to_text(variety_correct))
         
-        # K 欄：問題描述 — 如果有錯誤，自動填入錯誤摘要
-        problem_desc = self._generate_problem_description(
-            variety_correct, total_correct, name_answers, dose_answers, pills
-        )
-        if problem_desc:
-            self.sheet.cell(row, 11, problem_desc)
-        
+        # K 欄：問題描述 — 留空（不自動填寫）
         # L 欄：備註 — 留空
         # self.sheet.cell(row, 12, "")
         
