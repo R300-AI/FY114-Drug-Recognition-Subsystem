@@ -10,9 +10,6 @@ venv/
 # Generated outputs and deployed models
 src/gallery/
 
-# Runtime data
-records/
-
 # Log files
 *.log
 
