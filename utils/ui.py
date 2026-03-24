@@ -1782,15 +1782,11 @@ class App:
             raise
 
     def _reset_feedback(self):
-        """只重置回饋回答，保留辨識結果"""
-        self.state.variety_correct = None
-        self.state.total_correct = None
-        self.state.name_answers = [None] * len(self.state.categories)
-        self.state.dose_answers = [
-            [None] * len(cat.pills) for cat in self.state.categories
-        ]
+        """只重置回饋回答，保留辨識結果（套用預設驗證狀態）"""
         self.state.current_page = 0
         self.state.highlighted_pill = -1
+        # 使用統一的 set_defaults() 方法套用預設值
+        self.state.set_defaults(self._default_verification)
         self._update_info_panel()
 
     def _reset_state(self):
