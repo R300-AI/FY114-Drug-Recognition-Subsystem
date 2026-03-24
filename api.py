@@ -108,12 +108,16 @@ def analyse():
               f"conf={det.confidence:.2f}  bbox={det.bbox}", flush=True)
         result = _matcher(_encoder(crop))
 
-        # ── DEBUG: force all matches to license 衛署罕藥製字第000008號 ──
-        lic   = "衛署罕藥製字第000008號"
+        # ── DEBUG: 隨機選擇 00008 或 00009 測試多類別功能 ──
+        import random
+        lic = random.choice([
+            "衛署罕藥製字第000008號",
+            "衛署罕藥製字第000009號",
+        ])
         info  = _drug_db.get(lic, {})
         name  = info.get("name_zh", "未識別")
         score = 1.0
-        print(f"[api]   [{i+1}/{len(detections)}] → {lic}  {name}  score={score}  [DEBUG hardcode]", flush=True)
+        print(f"[api]   [{i+1}/{len(detections)}] → {lic}  {name}  score={score}  [DEBUG random]", flush=True)
 
         pills.append({
             "bbox":           list(det.bbox),
