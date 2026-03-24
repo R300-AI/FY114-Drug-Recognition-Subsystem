@@ -83,8 +83,31 @@ class PillEntry:
     """單顆偵測藥錠（每個 Detection 一筆）"""
     license: str
     name: str
-    same_count: int    # 同款藥錠（同 license）在畫面中的總數
-    color_idx: int     # 顏色索引（0-4）
+    same_count: int        # 同款藥錠（同 license）在畫面中的總數
+    color_idx: int         # 顏色索引（0-4）
+    category_label: str = ""      # 藥品類別標籤（A, B, C...）
+    index_in_category: int = 0    # 在該類別中的序號（1, 2, 3...）
+    detection_idx: int = 0        # 全局偵測索引（用於高亮定位）
+    
+    @property
+    def full_label(self) -> str:
+        """完整編碼標籤（如 A1, B2, C3）"""
+        return f"{self.category_label}{self.index_in_category}" if self.category_label else ""
+
+
+@dataclass
+class DrugCategory:
+    """藥品類別（同一種藥的所有藥錠）"""
+    license: str
+    name: str
+    category_label: str    # A, B, C...
+    color_idx: int
+    pills: list[PillEntry] = field(default_factory=list)  # 該類別下的所有藥錠
+    
+    @property
+    def total_count(self) -> int:
+        """該類別的藥錠總數"""
+        return len(self.pills)
 
 
 @dataclass
@@ -95,23 +118,40 @@ class VerificationState:
     variety_correct: bool | None = None
     total_count: int = 0         # 藥錠總顆數
     total_correct: bool | None = None
-    pills: list[PillEntry] = field(default_factory=list)   # 每顆一筆
-    current_page: int = 0
-    name_answers: list[bool | None] = field(default_factory=list)  # per detection
-    dose_answers: list[bool | None] = field(default_factory=list)  # per detection
+    pills: list[PillEntry] = field(default_factory=list)   # 每顆一筆（全局列表）
+    categories: list[DrugCategory] = field(default_factory=list)  # 按類別分組
+    current_page: int = 0        # 當前頁（藥品類別索引）
+    highlighted_pill: int = -1   # 當前高亮的藥錠索引（用於 hover/click）
+    name_answers: list[bool | None] = field(default_factory=list)  # per category
+    dose_answers: list[list[bool | None]] = field(default_factory=list)  # per pill in category
     
     def set_defaults(self, default_correct: bool | None = True):
         """設定預設的驗證狀態（可選擇預設為正確、錯誤或未選）"""
         self.variety_correct = default_correct
         self.total_correct = default_correct
-        if self.pills:
-            self.name_answers = [default_correct] * len(self.pills)
-            self.dose_answers = [default_correct] * len(self.pills)
+        # name_answers: 每個類別一個答案
+        if self.categories:
+            self.name_answers = [default_correct] * len(self.categories)
+            # dose_answers: 每個類別下的每顆藥錠各一個答案
+            self.dose_answers = [
+                [default_correct] * len(cat.pills) for cat in self.categories
+            ]
 
 
 # ============================================================
 # 輔助函式
 # ============================================================
+
+def get_category_label(index: int) -> str:
+    """將數字索引轉換為類別標籤（0→A, 1→B, ..., 25→Z, 26→AA, ...）"""
+    result = ""
+    index += 1  # 從 1 開始計算
+    while index > 0:
+        index -= 1
+        result = chr(ord('A') + (index % 26)) + result
+        index //= 26
+    return result
+
 
 def get_next_serial_number() -> str:
     """掃描 records/ 取最大序號 +1，回傳 6 位數字串"""
@@ -544,11 +584,11 @@ class App:
         inner_g = tk.Frame(global_frame, bg=COLOR_BG)
         inner_g.pack(fill=tk.X, padx=10, pady=8)
 
-        # 品項列
+        # 品項列（藥盤總品項）
         self.variety_row = tk.Frame(inner_g, bg=COLOR_BG)
         self.variety_row.pack(fill=tk.X, pady=3)
-        tk.Label(self.variety_row, text="品項", bg=COLOR_BG, font=FONT_BOLD, width=4).pack(side=tk.LEFT)
-        self.variety_num = tk.Label(self.variety_row, text="0", bg=COLOR_NUM_BG, font=FONT_NUM, width=5, relief=tk.FLAT, padx=4)
+        tk.Label(self.variety_row, text="【藥盤】總品項", bg=COLOR_BG, font=FONT_BOLD).pack(side=tk.LEFT)
+        self.variety_num = tk.Label(self.variety_row, text="0", bg=COLOR_NUM_BG, font=FONT_NUM, width=4, relief=tk.FLAT, padx=4)
         self.variety_num.pack(side=tk.LEFT, padx=4)
         tk.Label(self.variety_row, text="種", bg=COLOR_BG, font=FONT_NORMAL).pack(side=tk.LEFT)
         self.variety_err_btn = self._make_check_btn(self.variety_row, "錯誤", "bad", lambda: self._set_variety(False))
@@ -556,11 +596,11 @@ class App:
         self.variety_ok_btn = self._make_check_btn(self.variety_row, "正確", "ok", lambda: self._set_variety(True))
         self.variety_ok_btn.pack(side=tk.RIGHT, padx=2)
 
-        # 總量列
+        # 總量列（藥盤總數量）
         self.total_row = tk.Frame(inner_g, bg=COLOR_BG)
         self.total_row.pack(fill=tk.X, pady=3)
-        tk.Label(self.total_row, text="總量", bg=COLOR_BG, font=FONT_BOLD, width=4).pack(side=tk.LEFT)
-        self.total_num = tk.Label(self.total_row, text="0", bg=COLOR_NUM_BG, font=FONT_NUM, width=5, relief=tk.FLAT, padx=4)
+        tk.Label(self.total_row, text="【藥盤】總數量", bg=COLOR_BG, font=FONT_BOLD).pack(side=tk.LEFT)
+        self.total_num = tk.Label(self.total_row, text="0", bg=COLOR_NUM_BG, font=FONT_NUM, width=4, relief=tk.FLAT, padx=4)
         self.total_num.pack(side=tk.LEFT, padx=4)
         tk.Label(self.total_row, text="顆", bg=COLOR_BG, font=FONT_NORMAL).pack(side=tk.LEFT)
         self.total_err_btn = self._make_check_btn(self.total_row, "錯誤", "bad", lambda: self._set_total(False))
@@ -568,7 +608,7 @@ class App:
         self.total_ok_btn = self._make_check_btn(self.total_row, "正確", "ok", lambda: self._set_total(True))
         self.total_ok_btn.pack(side=tk.RIGHT, padx=2)
 
-        # --- 單碇驗證區 ---
+        # --- 單種藥品驗證區 ---
         self.drug_frame = tk.Frame(
             self.right_panel, bg=COLOR_BG,
             bd=3, relief=tk.SOLID,
@@ -587,12 +627,13 @@ class App:
         self.next_btn = tk.Button(nav, text="下一項", font=FONT_BTN, width=7, command=self._next_drug)
         self.next_btn.pack(side=tk.RIGHT)
 
-        inner_d = tk.Frame(self.drug_frame, bg=COLOR_BG)
-        inner_d.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 0))
+        # 藥品內容區（包含名稱、名稱核對、藥錠列表、總數）
+        self.drug_content = tk.Frame(self.drug_frame, bg=COLOR_BG)
+        self.drug_content.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 0))
 
         # 藥品名稱
         self.drug_name_label = tk.Label(
-            inner_d, text="--",
+            self.drug_content, text="--",
             bg="white", fg="#111",
             font=("Microsoft JhengHei", 13),
             wraplength=350, justify=tk.LEFT,
@@ -601,25 +642,143 @@ class App:
         )
         self.drug_name_label.pack(fill=tk.X, pady=(0, 8))
 
-        # 品項核對列
-        self.name_row = tk.Frame(inner_d, bg=COLOR_BG)
+        # 名稱核對列
+        self.name_row = tk.Frame(self.drug_content, bg=COLOR_BG)
         self.name_row.pack(fill=tk.X, pady=3)
-        tk.Label(self.name_row, text="品項核對", bg=COLOR_BG, font=FONT_BOLD).pack(side=tk.LEFT)
+        tk.Label(self.name_row, text="【藥品】名稱核對", bg=COLOR_BG, font=FONT_BOLD).pack(side=tk.LEFT)
         self.name_err_btn = self._make_check_btn(self.name_row, "錯誤", "bad", lambda: self._set_name(False))
         self.name_err_btn.pack(side=tk.RIGHT, padx=2)
         self.name_ok_btn = self._make_check_btn(self.name_row, "正確", "ok", lambda: self._set_name(True))
         self.name_ok_btn.pack(side=tk.RIGHT, padx=2)
 
-        # 劑量列
-        self.dose_row = tk.Frame(inner_d, bg=COLOR_BG)
-        self.dose_row.pack(fill=tk.X, pady=3)
-        self.dose_num = tk.Label(self.dose_row, text="0", bg=COLOR_NUM_BG, font=FONT_NUM, width=5, relief=tk.FLAT, padx=4)
-        self.dose_num.pack(side=tk.LEFT, padx=(0, 4))
-        tk.Label(self.dose_row, text="顆", bg=COLOR_BG, font=FONT_NORMAL).pack(side=tk.LEFT)
-        self.dose_err_btn = self._make_check_btn(self.dose_row, "錯誤", "bad", lambda: self._set_dose(False))
-        self.dose_err_btn.pack(side=tk.RIGHT, padx=2)
-        self.dose_ok_btn = self._make_check_btn(self.dose_row, "正確", "ok", lambda: self._set_dose(True))
-        self.dose_ok_btn.pack(side=tk.RIGHT, padx=2)
+        # 藥錠列表容器（可滾動）
+        self.pills_container = tk.Frame(self.drug_content, bg=COLOR_BG)
+        self.pills_container.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        
+        # 滾動區域
+        self.pills_canvas = tk.Canvas(self.pills_container, bg=COLOR_BG, highlightthickness=0)
+        self.pills_scrollbar = tk.Scrollbar(self.pills_container, orient=tk.VERTICAL, command=self.pills_canvas.yview)
+        self.pills_inner = tk.Frame(self.pills_canvas, bg=COLOR_BG)
+        
+        self.pills_canvas.configure(yscrollcommand=self.pills_scrollbar.set)
+        self.pills_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.pills_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.pills_canvas_window = self.pills_canvas.create_window((0, 0), window=self.pills_inner, anchor=tk.NW)
+        
+        # 綁定滾動事件
+        self.pills_inner.bind("<Configure>", self._on_pills_inner_configure)
+        self.pills_canvas.bind("<Configure>", self._on_pills_canvas_configure)
+        self.pills_canvas.bind_all("<MouseWheel>", self._on_pills_mousewheel)
+        
+        # 藥錠列表（動態生成）
+        self.pill_rows: list[dict] = []  # 儲存每列的 widget 參照
+        
+        # 總數顯示列
+        self.total_pills_row = tk.Frame(self.drug_content, bg=COLOR_BG, bd=1, relief=tk.SOLID)
+        self.total_pills_row.pack(fill=tk.X, pady=(8, 0))
+        self.total_pills_label = tk.Label(
+            self.total_pills_row, text="共計 0 顆",
+            bg=COLOR_BG, font=FONT_BOLD, pady=4
+        )
+        self.total_pills_label.pack()
+
+    def _on_pills_inner_configure(self, event):
+        """更新滾動區域"""
+        self.pills_canvas.configure(scrollregion=self.pills_canvas.bbox("all"))
+    
+    def _on_pills_canvas_configure(self, event):
+        """調整內部 frame 寬度以填滿 canvas"""
+        self.pills_canvas.itemconfig(self.pills_canvas_window, width=event.width)
+    
+    def _on_pills_mousewheel(self, event):
+        """滾輪滾動"""
+        if self.pills_canvas.winfo_height() < self.pills_inner.winfo_height():
+            self.pills_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _build_pill_rows(self, category: DrugCategory):
+        """動態建立當前類別的藥錠列表"""
+        # 清除舊的藥錠列
+        for row_data in self.pill_rows:
+            row_data["frame"].destroy()
+        self.pill_rows.clear()
+        
+        bg_color = DRUG_COLORS[category.color_idx]["bg"]
+        border_color = DRUG_COLORS[category.color_idx]["border"]
+        
+        for i, pill in enumerate(category.pills):
+            row = tk.Frame(self.pills_inner, bg=bg_color, bd=1, relief=tk.SOLID)
+            row.pack(fill=tk.X, pady=2)
+            
+            # 編碼標籤（如 C1, C2）
+            label_frame = tk.Frame(row, bg=border_color, padx=4, pady=2)
+            label_frame.pack(side=tk.LEFT, padx=(4, 8), pady=4)
+            label = tk.Label(
+                label_frame, text=pill.full_label,
+                bg=border_color, fg="white", font=FONT_BOLD
+            )
+            label.pack()
+            
+            # 數量文字
+            tk.Label(row, text="數量", bg=bg_color, font=FONT_NORMAL).pack(side=tk.LEFT)
+            dose_num = tk.Label(row, text="1", bg=COLOR_NUM_BG, font=FONT_NUM, width=3, padx=2)
+            dose_num.pack(side=tk.LEFT, padx=4)
+            tk.Label(row, text="顆", bg=bg_color, font=FONT_NORMAL).pack(side=tk.LEFT)
+            
+            # 正確/錯誤按鈕
+            page = self.state.current_page
+            pill_idx = i
+            err_btn = self._make_check_btn(row, "錯誤", "bad", lambda p=page, pi=pill_idx: self._set_pill_dose(p, pi, False))
+            err_btn.pack(side=tk.RIGHT, padx=2)
+            ok_btn = self._make_check_btn(row, "正確", "ok", lambda p=page, pi=pill_idx: self._set_pill_dose(p, pi, True))
+            ok_btn.pack(side=tk.RIGHT, padx=2)
+            
+            # 綁定 hover/click 事件
+            detection_idx = pill.detection_idx
+            row.bind("<Enter>", lambda e, idx=detection_idx: self._on_pill_hover(idx))
+            row.bind("<Leave>", lambda e: self._on_pill_leave())
+            row.bind("<Button-1>", lambda e, idx=detection_idx: self._on_pill_click(idx))
+            # 綁定所有子元件
+            for child in row.winfo_children():
+                child.bind("<Enter>", lambda e, idx=detection_idx: self._on_pill_hover(idx))
+                child.bind("<Leave>", lambda e: self._on_pill_leave())
+                if not isinstance(child, tk.Button):  # 按鈕保留自己的點擊事件
+                    child.bind("<Button-1>", lambda e, idx=detection_idx: self._on_pill_click(idx))
+            
+            self.pill_rows.append({
+                "frame": row,
+                "label": label,
+                "dose_num": dose_num,
+                "ok_btn": ok_btn,
+                "err_btn": err_btn,
+                "detection_idx": detection_idx,
+            })
+    
+    def _on_pill_hover(self, detection_idx: int):
+        """滑鼠移入藥錠列時高亮左側對應藥錠"""
+        self.state.highlighted_pill = detection_idx
+        self._refresh_ai_overlay()
+    
+    def _on_pill_leave(self):
+        """滑鼠移出藥錠列時取消高亮"""
+        self.state.highlighted_pill = -1
+        self._refresh_ai_overlay()
+    
+    def _on_pill_click(self, detection_idx: int):
+        """點擊藥錠列時高亮（平板用）"""
+        self.state.highlighted_pill = detection_idx
+        self._refresh_ai_overlay()
+    
+    def _refresh_ai_overlay(self):
+        """重繪 AI 疊加層（用於高亮更新）"""
+        if self._is_analysed and self._captured_image is not None and self._detections:
+            self._ai_image = self._generate_ai_overlay(
+                self._captured_image,
+                self._detections,
+                self.state.pills,
+                highlighted_idx=self.state.highlighted_pill,
+            )
+            if self.current_tab == "ai":
+                self._refresh_image()
 
     @staticmethod
     def _make_check_btn(parent, text: str, kind: str, cmd) -> tk.Button:
@@ -873,7 +1032,7 @@ class App:
         self._update_state_from_results(detections, results)
         self._detections = detections
         self._is_analysed = True
-        self._ai_image = self._generate_ai_overlay(frame, detections, self.state.pills, current_page=0)
+        self._ai_image = self._generate_ai_overlay(frame, detections, self.state.pills, highlighted_idx=-1)
         self.current_tab = "ai"
         self._update_tab_buttons()
         self._refresh_image()
@@ -885,27 +1044,28 @@ class App:
         self,
         image: np.ndarray,
         detections: list[Detection],
-        pills: list,
-        current_page: int = -1,
+        pills: list[PillEntry],
+        highlighted_idx: int = -1,
     ) -> np.ndarray:
-        """在原圖上疊加 YOLO 分割遮罩、邊界框與編號徽章。
+        """在原圖上疊加 YOLO 分割遮罩、邊界框與類別編碼標籤。
 
         配色直接取自 PillEntry.color_idx（與右側面板完全一致）。
-        current_page 對應的藥錠以高透明度遮罩 + 粗框高亮顯示，
-        其餘藥錠以低透明度淡化，讓使用者清楚知道黃色框框對應哪顆。
+        highlighted_idx 對應的藥錠以高透明度遮罩 + 粗框高亮顯示，
+        其餘藥錠以低透明度淡化。
+        標籤顯示格式為 A1, B2, C3 等類別編碼。
         """
         h_img, w_img = image.shape[:2]
         overlay = image.copy()
 
-        # ── Pass 1：分割遮罩（current 高亮，其餘淡化）──
+        # ── Pass 1：分割遮罩（highlighted 高亮，其餘淡化）──
         for i, (det, pill) in enumerate(zip(detections, pills)):
             color_bgr = (
                 DRUG_COLORS[pill.color_idx]["bgr"] if pill.license
                 else (128, 128, 128)
             )
             color_arr = np.array(color_bgr, dtype=np.float32)
-            is_cur = (i == current_page)
-            alpha = 0.65 if is_cur else 0.25
+            is_highlighted = (i == highlighted_idx)
+            alpha = 0.65 if is_highlighted else 0.35
 
             if det.mask is not None:
                 mask = det.mask
@@ -916,33 +1076,42 @@ class App:
                     overlay[mb].astype(np.float32) * (1 - alpha) + color_arr * alpha
                 ).clip(0, 255).astype(np.uint8)
 
-        # ── Pass 2：邊界框 + 編號徽章 ──
+        # ── Pass 2：邊界框 + 類別編碼標籤 ──
         for i, (det, pill) in enumerate(zip(detections, pills)):
             color_bgr = (
                 DRUG_COLORS[pill.color_idx]["bgr"] if pill.license
                 else (128, 128, 128)
             )
-            is_cur = (i == current_page)
+            is_highlighted = (i == highlighted_idx)
             x1, y1, x2, y2 = det.bbox
 
-            # 邊界框：current 粗框，其餘細框
-            thickness = 3 if is_cur else 1
+            # 邊界框：highlighted 粗框，其餘細框
+            thickness = 4 if is_highlighted else 2
             cv2.rectangle(overlay, (x1, y1), (x2, y2), color_bgr, thickness)
 
-            # 編號徽章（圓形背景 + 白色數字）
-            num = str(i + 1)
-            r_badge = 12 if is_cur else 9
-            cx = x1 + r_badge + 2
-            cy = y1 + r_badge + 2
-            cv2.circle(overlay, (cx, cy), r_badge, color_bgr, -1)
-            cv2.circle(overlay, (cx, cy), r_badge, (255, 255, 255), 1)
-            font_scale = 0.45 if is_cur else 0.35
-            tw, th = cv2.getTextSize(num, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)[0]
+            # 類別編碼標籤（圓角矩形背景 + 白色文字）
+            label = pill.full_label or "?"
+            font_scale = 0.6 if is_highlighted else 0.5
+            font_thickness = 2 if is_highlighted else 1
+            (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
+            
+            # 標籤位置（左上角）
+            pad = 4
+            lx1 = x1
+            ly1 = y1
+            lx2 = x1 + tw + pad * 2
+            ly2 = y1 + th + pad * 2 + baseline
+            
+            # 繪製標籤背景
+            cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), color_bgr, -1)
+            cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), (255, 255, 255), 1)
+            
+            # 繪製標籤文字
             cv2.putText(
-                overlay, num,
-                (cx - tw // 2, cy + th // 2),
+                overlay, label,
+                (lx1 + pad, ly1 + th + pad),
                 cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                (255, 255, 255), 1, cv2.LINE_AA,
+                (255, 255, 255), font_thickness, cv2.LINE_AA,
             )
 
         return overlay
@@ -955,46 +1124,86 @@ class App:
         """由偵測結果更新 VerificationState。
 
         每顆偵測藥錠建立一筆 PillEntry（含未識別），
-        藥品種類以 license_number 去重計算 variety_count。
+        藥品種類以 license_number 去重建立 DrugCategory。
         """
-        # 分配每個 license 的配色（首次出現順序）
-        license_color: dict[str, int] = {}
-        color_counter = 0
+        # 分配每個 license 的配色與類別標籤（首次出現順序）
+        license_info: dict[str, dict] = {}  # license -> {color_idx, category_label, name}
+        category_counter = 0
         for r in results:
-            if r and r.license_number not in license_color:
-                license_color[r.license_number] = color_counter % len(DRUG_COLORS)
-                color_counter += 1
-
-        # 統計每個 license 出現幾顆（供 same_count 顯示）
+            if r and r.license_number not in license_info:
+                license_info[r.license_number] = {
+                    "color_idx": category_counter % len(DRUG_COLORS),
+                    "category_label": get_category_label(category_counter),
+                    "name": r.name,
+                }
+                category_counter += 1
+        
+        # 為未識別藥品分配一個特殊類別
+        unidentified_label = get_category_label(category_counter) if any(r is None for r in results) else ""
+        
+        # 統計每個 license 出現幾顆
         license_count: dict[str, int] = {}
         for r in results:
             if r:
                 license_count[r.license_number] = license_count.get(r.license_number, 0) + 1
 
+        # 追蹤每個類別中的藥錠序號
+        category_pill_counter: dict[str, int] = {}  # license/category -> 當前計數
+        
         # 每顆 detection 建立一筆 PillEntry
         pills: list[PillEntry] = []
-        for r in results:
+        for i, r in enumerate(results):
             if r is None:
+                # 未識別藥品
+                cat_key = "__unidentified__"
+                category_pill_counter[cat_key] = category_pill_counter.get(cat_key, 0) + 1
                 pills.append(PillEntry(
                     license="",
                     name="未識別",
                     same_count=1,
                     color_idx=len(DRUG_COLORS) - 1,
+                    category_label=unidentified_label,
+                    index_in_category=category_pill_counter[cat_key],
+                    detection_idx=i,
                 ))
             else:
+                info = license_info[r.license_number]
+                category_pill_counter[r.license_number] = category_pill_counter.get(r.license_number, 0) + 1
                 pills.append(PillEntry(
                     license=r.license_number,
                     name=r.name,
                     same_count=license_count.get(r.license_number, 1),
-                    color_idx=license_color[r.license_number],
+                    color_idx=info["color_idx"],
+                    category_label=info["category_label"],
+                    index_in_category=category_pill_counter[r.license_number],
+                    detection_idx=i,
                 ))
 
-        unique_licenses = {p.license for p in pills if p.license}
+        # 建立 DrugCategory 列表（按首次出現順序）
+        categories: list[DrugCategory] = []
+        seen_licenses: set[str] = set()
+        
+        for pill in pills:
+            cat_key = pill.license if pill.license else "__unidentified__"
+            if cat_key not in seen_licenses:
+                seen_licenses.add(cat_key)
+                # 收集該類別的所有藥錠
+                cat_pills = [p for p in pills if (p.license if p.license else "__unidentified__") == cat_key]
+                categories.append(DrugCategory(
+                    license=pill.license,
+                    name=pill.name,
+                    category_label=pill.category_label,
+                    color_idx=pill.color_idx,
+                    pills=cat_pills,
+                ))
+
         self.state.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.state.variety_count = len(unique_licenses)
+        self.state.variety_count = len(categories)
         self.state.total_count = len(pills)
         self.state.pills = pills
+        self.state.categories = categories
         self.state.current_page = 0
+        self.state.highlighted_pill = -1
         
         # 套用預設驗證狀態
         self.state.set_defaults(self._default_verification)
@@ -1004,39 +1213,56 @@ class App:
     # --------------------------------------------------------
 
     def _update_info_panel(self):
+        """更新右側資訊面板（按藥品類別分頁）"""
         self.variety_num.config(text=str(self.state.variety_count))
         self.total_num.config(text=str(self.state.total_count))
 
-        if self.state.pills and 0 <= self.state.current_page < len(self.state.pills):
-            pill = self.state.pills[self.state.current_page]
-            self.drug_name_label.config(text=pill.name or "--")
-            self.dose_num.config(text=str(pill.same_count))  # 同款共幾顆
+        if self.state.categories and 0 <= self.state.current_page < len(self.state.categories):
+            category = self.state.categories[self.state.current_page]
+            
+            # 更新藥品名稱
+            self.drug_name_label.config(text=category.name or "--")
+            
+            # 更新分頁標籤
             self.page_label.config(
-                text=f"第 {self.state.current_page + 1} 顆 / 共 {len(self.state.pills)} 顆"
+                text=f"第 {self.state.current_page + 1} 項 / 共 {len(self.state.categories)} 項"
             )
-            c = DRUG_COLORS[pill.color_idx]
+            
+            # 更新框架顏色
+            c = DRUG_COLORS[category.color_idx]
             self.drug_frame.config(highlightbackground=c["border"], bg=c["bg"])
-            for w in self.drug_frame.winfo_children():
+            self.drug_content.config(bg=c["bg"])
+            self.name_row.config(bg=c["bg"])
+            self.total_pills_row.config(bg=c["bg"])
+            self.total_pills_label.config(bg=c["bg"])
+            for w in self.name_row.winfo_children():
                 try:
-                    w.config(bg=c["bg"])
-                    for ww in w.winfo_children():
-                        try:
-                            ww.config(bg=c["bg"])
-                        except Exception:
-                            pass
+                    if not isinstance(w, tk.Button):
+                        w.config(bg=c["bg"])
                 except Exception:
                     pass
+            
+            # 動態建立藥錠列表
+            self._build_pill_rows(category)
+            
+            # 更新總數顯示
+            self.total_pills_label.config(text=f"共計 {category.total_count} 顆")
+            
         else:
             self.drug_name_label.config(text="--")
-            self.dose_num.config(text="0")
-            self.page_label.config(text="第 0 顆 / 共 0 顆")
+            self.page_label.config(text="第 0 項 / 共 0 項")
             self.drug_frame.config(highlightbackground="#ffdd55", bg=COLOR_BG)
+            self.total_pills_label.config(text="共計 0 顆")
+            # 清空藥錠列表
+            for row_data in self.pill_rows:
+                row_data["frame"].destroy()
+            self.pill_rows.clear()
 
         self._update_button_states()
         self._update_nav_buttons()
         self._clear_highlights()
 
-        # 重繪 overlay（highlight 當前頁對應的藥錠）
+        # 重繪 overlay
         if (self._is_analysed and self._detections
                 and self._captured_image is not None
                 and self.state.pills):
@@ -1044,7 +1270,7 @@ class App:
                 self._captured_image,
                 self._detections,
                 self.state.pills,
-                current_page=self.state.current_page,
+                highlighted_idx=self.state.highlighted_pill,
             )
             if self.current_tab == "ai":
                 self._refresh_image()
@@ -1053,15 +1279,30 @@ class App:
         """更新所有正確/錯誤按鈕的視覺狀態"""
         self._apply_btn_state(self.variety_ok_btn, self.variety_err_btn, self.state.variety_correct)
         self._apply_btn_state(self.total_ok_btn, self.total_err_btn, self.state.total_correct)
-        if self.state.pills and 0 <= self.state.current_page < len(self.state.pills):
-            pill = self.state.pills[self.state.current_page]
+        
+        # 名稱核對按鈕（per category）
+        if self.state.categories and 0 <= self.state.current_page < len(self.state.categories):
             self._apply_btn_state(self.name_ok_btn, self.name_err_btn,
                                   self.state.name_answers[self.state.current_page])
-            self._apply_btn_state(self.dose_ok_btn, self.dose_err_btn,
-                                  self.state.dose_answers[self.state.current_page])
+            # 更新每顆藥錠的按鈕狀態
+            self._update_pill_row_button_states()
         else:
             self._apply_btn_state(self.name_ok_btn, self.name_err_btn, None)
-            self._apply_btn_state(self.dose_ok_btn, self.dose_err_btn, None)
+    
+    def _update_pill_row_button_states(self):
+        """更新藥錠列表中每列的按鈕狀態"""
+        page = self.state.current_page
+        if page < 0 or page >= len(self.state.dose_answers):
+            return
+        
+        dose_answers_for_page = self.state.dose_answers[page]
+        for i, row_data in enumerate(self.pill_rows):
+            if i < len(dose_answers_for_page):
+                self._apply_btn_state(
+                    row_data["ok_btn"],
+                    row_data["err_btn"],
+                    dose_answers_for_page[i]
+                )
 
     @staticmethod
     def _apply_btn_state(ok_btn: tk.Button, err_btn: tk.Button, value: bool | None):
@@ -1078,7 +1319,8 @@ class App:
             err_btn.config(relief=tk.SOLID, bd=NORMAL_BD, fg=COLOR_BTN_BAD_T)
 
     def _update_nav_buttons(self):
-        total = len(self.state.pills)
+        """更新分頁導航按鈕狀態（按類別分頁）"""
+        total = len(self.state.categories)
         page  = self.state.current_page
         self.prev_btn.config(state=tk.NORMAL if page > 0 else tk.DISABLED)
         self.next_btn.config(state=tk.NORMAL if page < total - 1 else tk.DISABLED)
@@ -1100,18 +1342,20 @@ class App:
         self._auto_switch_ai()
 
     def _set_name(self, value: bool):
-        if self.state.pills and 0 <= self.state.current_page < len(self.state.pills):
+        """設定當前類別的名稱核對結果"""
+        if self.state.categories and 0 <= self.state.current_page < len(self.state.categories):
             self.state.name_answers[self.state.current_page] = value
             self._update_button_states()
             self._clear_highlight(self.name_row)
             self._auto_switch_ai()
 
-    def _set_dose(self, value: bool):
-        if self.state.pills and 0 <= self.state.current_page < len(self.state.pills):
-            self.state.dose_answers[self.state.current_page] = value
-            self._update_button_states()
-            self._clear_highlight(self.dose_row)
-            self._auto_switch_ai()
+    def _set_pill_dose(self, page: int, pill_idx: int, value: bool):
+        """設定指定藥錠的數量核對結果"""
+        if 0 <= page < len(self.state.dose_answers):
+            if 0 <= pill_idx < len(self.state.dose_answers[page]):
+                self.state.dose_answers[page][pill_idx] = value
+                self._update_pill_row_button_states()
+                self._auto_switch_ai()
 
     def _auto_switch_ai(self):
         if self.current_tab != "ai" and self._is_analysed:
@@ -1124,12 +1368,14 @@ class App:
     def _prev_drug(self):
         if self.state.current_page > 0:
             self.state.current_page -= 1
+            self.state.highlighted_pill = -1  # 清除高亮
             self._update_info_panel()
             self._auto_switch_ai()
 
     def _next_drug(self):
-        if self.state.current_page < len(self.state.pills) - 1:
+        if self.state.current_page < len(self.state.categories) - 1:
             self.state.current_page += 1
+            self.state.highlighted_pill = -1  # 清除高亮
             self._update_info_panel()
             self._auto_switch_ai()
 
@@ -1144,26 +1390,28 @@ class App:
         row.config(highlightthickness=0)
 
     def _clear_highlights(self):
-        for row in [self.variety_row, self.total_row, self.name_row, self.dose_row]:
+        for row in [self.variety_row, self.total_row, self.name_row]:
             self._clear_highlight(row)
 
     # --------------------------------------------------------
     # 「完成」邏輯
     # --------------------------------------------------------
 
-    def _find_first_missing(self) -> tuple[str, int] | None:
-        """找第一筆未填項目，回傳 (欄位類型, 要跳到的頁碼) 或 None（全填完）"""
+    def _find_first_missing(self) -> tuple[str, int, int] | None:
+        """找第一筆未填項目，回傳 (欄位類型, 類別索引, 藥錠索引) 或 None（全填完）"""
         if self.state.variety_correct is None:
-            return ("variety", self.state.current_page)
+            return ("variety", self.state.current_page, -1)
         if self.state.total_correct is None:
-            return ("total", self.state.current_page)
-        # name_answers：每顆獨立
+            return ("total", self.state.current_page, -1)
+        # name_answers：每個類別一個
         for i, ans in enumerate(self.state.name_answers):
             if ans is None:
-                return ("name", i)
-        for i, ans in enumerate(self.state.dose_answers):
-            if ans is None:
-                return ("dose", i)
+                return ("name", i, -1)
+        # dose_answers：每個類別下的每顆藥錠
+        for cat_idx, cat_answers in enumerate(self.state.dose_answers):
+            for pill_idx, ans in enumerate(cat_answers):
+                if ans is None:
+                    return ("dose", cat_idx, pill_idx)
         return None
 
     def _on_done(self):
@@ -1171,7 +1419,7 @@ class App:
 
     def _show_review_modal(self):
         """填報總覽 Modal：顯示所有答案，確認送出才寫入磁碟"""
-        MODAL_W, MODAL_H = 500, 520
+        MODAL_W, MODAL_H = 500, 560
         modal = tk.Toplevel(self.root)
         modal.title("填報總覽")
         modal.resizable(False, False)
@@ -1224,28 +1472,43 @@ class App:
             row = tk.Frame(parent, bg=bg)
             row.pack(fill=tk.X, padx=0, pady=1)
             tk.Label(row, text=label_txt, font=FONT_NORMAL, bg=bg,
-                     anchor=tk.W, width=20).pack(side=tk.LEFT, padx=8, pady=4)
+                     anchor=tk.W, width=24).pack(side=tk.LEFT, padx=8, pady=4)
             ans_txt, ans_col = answer_style(value)
             tk.Label(row, text=ans_txt, font=FONT_BOLD, bg=bg,
                      fg=ans_col).pack(side=tk.RIGHT, padx=8)
 
         global_bg = "#f8f8f8"
-        add_row(inner, f"品項　{self.state.variety_count} 種", self.state.variety_correct, global_bg)
-        add_row(inner, f"總量　{self.state.total_count} 顆", self.state.total_correct, global_bg)
+        add_row(inner, f"【藥盤】總品項　{self.state.variety_count} 種", self.state.variety_correct, global_bg)
+        add_row(inner, f"【藥盤】總數量　{self.state.total_count} 顆", self.state.total_correct, global_bg)
         tk.Frame(inner, bg="#ccc", height=1).pack(fill=tk.X, padx=8, pady=4)
 
-        for i, pill in enumerate(self.state.pills):
-            c = DRUG_COLORS[pill.color_idx]
+        # 按類別顯示
+        for cat_idx, category in enumerate(self.state.categories):
+            c = DRUG_COLORS[category.color_idx]
             drug_bg = c["bg"]
+            
+            # 類別標題
             hdr = tk.Frame(inner, bg=drug_bg,
                            highlightbackground=c["border"], highlightthickness=2)
             hdr.pack(fill=tk.X, padx=8, pady=(6, 0))
-            tk.Label(hdr, text=f"第 {i+1} 顆｜{pill.name or pill.license or '未識別'}",
+            tk.Label(hdr, text=f"【{category.category_label}】{category.name or '未識別'}",
                      font=FONT_BOLD, bg=drug_bg, fg="#333",
                      wraplength=440, justify=tk.LEFT, anchor=tk.W,
                      padx=8, pady=4).pack(fill=tk.X)
-            add_row(inner, "品項核對", self.state.name_answers[i], drug_bg)
-            add_row(inner, f"顆數核對（{pill.same_count} 顆）", self.state.dose_answers[i], drug_bg)
+            
+            # 名稱核對
+            add_row(inner, "　　名稱核對", self.state.name_answers[cat_idx] if cat_idx < len(self.state.name_answers) else None, drug_bg)
+            
+            # 每顆藥錠的數量核對
+            dose_answers_for_cat = self.state.dose_answers[cat_idx] if cat_idx < len(self.state.dose_answers) else []
+            for pill_idx, pill in enumerate(category.pills):
+                ans = dose_answers_for_cat[pill_idx] if pill_idx < len(dose_answers_for_cat) else None
+                add_row(inner, f"　　{pill.full_label} 數量核對", ans, drug_bg)
+            
+            # 小計
+            tk.Label(inner, text=f"　　共計 {category.total_count} 顆", 
+                     font=FONT_NORMAL, bg=drug_bg, fg="#666", anchor=tk.W,
+                     padx=8, pady=2).pack(fill=tk.X)
 
         all_filled = self._find_first_missing() is None
         btn_frame = tk.Frame(modal, bg=COLOR_BG)
@@ -1259,17 +1522,19 @@ class App:
             missing = self._find_first_missing()
             modal_destroy()
             if missing:
-                missing_type, drug_idx = missing
-                self.state.current_page = drug_idx
+                missing_type, cat_idx, pill_idx = missing
+                self.state.current_page = cat_idx
                 self._update_info_panel()
                 row_map = {
                     "variety": self.variety_row,
                     "total":   self.total_row,
                     "name":    self.name_row,
-                    "dose":    self.dose_row,
                 }
                 if missing_type in row_map:
                     self._highlight_missing(row_map[missing_type])
+                # 如果是 dose 類型，高亮對應的藥錠列
+                elif missing_type == "dose" and pill_idx >= 0 and pill_idx < len(self.pill_rows):
+                    self._highlight_missing(self.pill_rows[pill_idx]["frame"])
 
         def do_submit():
             modal_destroy()
@@ -1407,9 +1672,12 @@ class App:
         """只重置回饋回答，保留辨識結果"""
         self.state.variety_correct = None
         self.state.total_correct = None
-        self.state.name_answers = [None] * len(self.state.pills)
-        self.state.dose_answers = [None] * len(self.state.dose_answers)
+        self.state.name_answers = [None] * len(self.state.categories)
+        self.state.dose_answers = [
+            [None] * len(cat.pills) for cat in self.state.categories
+        ]
         self.state.current_page = 0
+        self.state.highlighted_pill = -1
         self._update_info_panel()
 
     def _reset_state(self):
@@ -1432,12 +1700,19 @@ class App:
         self.variety_num.config(text="0")
         self.total_num.config(text="0")
         self.drug_name_label.config(text="--")
-        self.dose_num.config(text="0")
+        self.total_pills_label.config(text="共計 0 顆")
         self.page_label.config(text="第 0 項 / 共 0 項")
+        
+        # 清空藥錠列表
+        for row_data in self.pill_rows:
+            row_data["frame"].destroy()
+        self.pill_rows.clear()
+        
         self._update_button_states()
         self._update_nav_buttons()
         self._clear_highlights()
         self.drug_frame.config(highlightbackground="#ffdd55", bg=COLOR_BG)
+        self.drug_content.config(bg=COLOR_BG)
 
         self.done_btn.config(state=tk.DISABLED, bg="#bbb")
 
@@ -1464,4 +1739,4 @@ class App:
         self.root.destroy()
 
 
-__all__ = ["App", "DRUG_COLORS", "RECORDS_DIR", "PillEntry", "VerificationState"]
+__all__ = ["App", "DRUG_COLORS", "RECORDS_DIR", "PillEntry", "DrugCategory", "VerificationState", "get_category_label"]

@@ -103,7 +103,7 @@ class ExcelWriter:
         total_correct: bool | None,
         pills: list,
         name_answers: list[bool | None],
-        dose_answers: list[bool | None],
+        dose_answers: list[list[bool | None]],  # 每個類別下的每顆藥錠
         image_path: str = "",
         start_row: Optional[int] = None,
     ):
@@ -117,8 +117,8 @@ class ExcelWriter:
             total_count: 總顆數
             total_correct: 總量驗證結果
             pills: PillEntry 列表（每顆藥一筆）
-            name_answers: 各藥品名稱的驗證結果
-            dose_answers: 各藥品劑量的驗證結果
+            name_answers: 各藥品類別的名稱驗證結果（per category）
+            dose_answers: 各藥品類別下每顆藥錠的劑量驗證結果（per category, per pill）
             image_path: 圖片路徑（相對於問卷檔案）
             start_row: 寫入的起始列（None 則自動找下一個空白列）
         """
@@ -146,13 +146,16 @@ class ExcelWriter:
         # self.sheet.cell(row, 5, "")  # 情境
         # self.sheet.cell(row, 6, "")  # 條件(光源角度)
         
+        # 展開所有 dose_answers 為一維列表（用於整體判斷）
+        all_dose_answers = [ans for cat_answers in dose_answers for ans in cat_answers]
+        
         # G 欄：藥盤整體判定結果(自動判斷)
         # 只有所有驗證項目都是 True 才填「正確」
         all_correct = (
             variety_correct is True and
             total_correct is True and
             all(ans is True for ans in name_answers) and
-            all(ans is True for ans in dose_answers)
+            all(ans is True for ans in all_dose_answers)
         )
         self.sheet.cell(row, 7, "正確" if all_correct else "錯誤")
         
@@ -194,7 +197,7 @@ class ExcelWriter:
         variety_correct: bool | None,
         total_correct: bool | None,
         name_answers: list[bool | None],
-        dose_answers: list[bool | None],
+        dose_answers: list[list[bool | None]],
         pills: list,
     ) -> str:
         """自動產生問題描述（僅在有錯誤時）"""
@@ -205,12 +208,24 @@ class ExcelWriter:
         if total_correct is False:
             problems.append("總量錯誤")
         
-        for i, (name_ans, dose_ans, pill) in enumerate(zip(name_answers, dose_answers, pills)):
-            pill_name = pill.name or "未識別"
+        # 根據新的資料結構處理：name_answers 是 per category, dose_answers 是 per category per pill
+        # pills 列表保持 flat（所有藥錠）
+        pill_idx = 0
+        for cat_idx, (name_ans, cat_dose_answers) in enumerate(zip(name_answers, dose_answers)):
             if name_ans is False:
-                problems.append(f"第{i+1}顆({pill_name})品項錯誤")
-            if dose_ans is False:
-                problems.append(f"第{i+1}顆({pill_name})劑量錯誤")
+                # 取該類別的第一顆藥錠名稱
+                if pill_idx < len(pills):
+                    pill_name = pills[pill_idx].name or "未識別"
+                    problems.append(f"類別{cat_idx+1}({pill_name})名稱錯誤")
+            
+            for pill_in_cat_idx, dose_ans in enumerate(cat_dose_answers):
+                if dose_ans is False:
+                    actual_pill_idx = pill_idx + pill_in_cat_idx
+                    if actual_pill_idx < len(pills):
+                        pill = pills[actual_pill_idx]
+                        problems.append(f"{pill.full_label or f'第{actual_pill_idx+1}顆'}({pill.name or '未識別'})劑量錯誤")
+            
+            pill_idx += len(cat_dose_answers)
         
         return "；".join(problems) if problems else ""
     
