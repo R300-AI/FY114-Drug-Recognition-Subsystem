@@ -37,12 +37,14 @@ except ImportError:
     HAS_LED = False
 
 from .types import Detection, MatchResult
+from .excel_writer import ExcelWriter, create_backup, HAS_OPENPYXL
 
 # ============================================================
 # 常數
 # ============================================================
 
 RECORDS_DIR = Path("records")
+EXCEL_QUESTIONNAIRE = Path("成大第一階段辨識問卷_1150304建議修改版.xlsx")
 
 # 每種藥品的配色（邊框色、背景色、YOLO覆蓋BGR）
 DRUG_COLORS = [
@@ -139,11 +141,13 @@ class App:
         fullscreen: bool = False,
         debug: bool = False,
         default_verification: bool | None = True,
+        enable_excel_export: bool = True,
     ):
         self.root    = root
         self._api_url = api_url.rstrip("/")
         self._debug  = debug
         self._default_verification = default_verification  # 預設驗證狀態（True=正確, False=錯誤, None=未選）
+        self._enable_excel_export = enable_excel_export and HAS_OPENPYXL  # Excel 匯出功能
 
         # --- 狀態 ---
         self.state = VerificationState()
@@ -196,6 +200,16 @@ class App:
         self._init_drawer_sensor()
         self._update_tray_id()
         self._reset_state()   # 確保 UI 為 IDLE 狀態
+        
+        # --- Excel 匯出檢查 ---
+        if self._enable_excel_export:
+            if EXCEL_QUESTIONNAIRE.exists():
+                print(f"[excel] 問卷檔案已找到: {EXCEL_QUESTIONNAIRE.name}")
+            else:
+                print(f"[excel] 警告: 問卷檔案不存在: {EXCEL_QUESTIONNAIRE}")
+                self._enable_excel_export = False
+        elif not HAS_OPENPYXL:
+            print("[excel] openpyxl 未安裝，Excel 匯出功能已停用")
 
         # --- 關閉事件 ---
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1327,6 +1341,50 @@ class App:
             img_path = RECORDS_DIR / f"{tray_id}.jpg"
             cv2.imwrite(str(img_path), self._captured_image)
             print(f"[save] {img_path}")
+        
+        # --- Excel 問卷自動填寫 ---
+        if self._enable_excel_export:
+            try:
+                self._export_to_excel()
+            except Exception as e:
+                print(f"[excel] 匯出失敗: {e}")
+                # 不中斷流程，只記錄錯誤
+    
+    def _export_to_excel(self):
+        """將驗證結果匯出至 Excel 問卷"""
+        if not EXCEL_QUESTIONNAIRE.exists():
+            print(f"[excel] 問卷檔案不存在: {EXCEL_QUESTIONNAIRE}")
+            return
+        
+        # 建立備份（首次寫入時）
+        backup_dir = RECORDS_DIR / "excel_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            writer = ExcelWriter(EXCEL_QUESTIONNAIRE)
+            
+            # 寫入驗證資料
+            writer.write_verification_data(
+                tray_id=self.state.tray_id,
+                timestamp=self.state.timestamp,
+                variety_count=self.state.variety_count,
+                variety_correct=self.state.variety_correct,
+                total_count=self.state.total_count,
+                total_correct=self.state.total_correct,
+                pills=self.state.pills,
+                name_answers=self.state.name_answers,
+                dose_answers=self.state.dose_answers,
+            )
+            
+            # 儲存
+            writer.save()
+            writer.close()
+            
+            print(f"[excel] 已成功匯出至問卷")
+            
+        except Exception as e:
+            print(f"[excel] 寫入錯誤: {e}")
+            raise
 
     def _reset_feedback(self):
         """只重置回饋回答，保留辨識結果"""

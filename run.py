@@ -29,6 +29,9 @@ def main():
     parser.add_argument("--no-default-correct", dest="default_correct", 
                         action="store_false",
                         help="不預設辨識結果為正確（需使用者手動選擇）")
+    parser.add_argument("--no-excel-export", dest="excel_export",
+                        action="store_false", default=True,
+                        help="停用 Excel 問卷自動填寫功能")
     args = parser.parse_args()
 
     if args.debug:
@@ -37,10 +40,12 @@ def main():
         print(f"[init] API endpoint: {args.api}")
 
     print(f"[init] Default verification: {'Correct' if args.default_correct else 'Not selected'}")
+    print(f"[init] Excel export: {'Enabled' if args.excel_export else 'Disabled'}")
     print("[init] Starting GUI...")
     root = tk.Tk()
     App(root, api_url=args.api, fullscreen=args.fullscreen, debug=args.debug,
-        default_verification=True if args.default_correct else None)
+        default_verification=True if args.default_correct else None,
+        enable_excel_export=args.excel_export)
     root.mainloop()
 
 
