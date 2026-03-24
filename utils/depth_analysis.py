@@ -51,14 +51,26 @@ class DrawerStateDetector:
     直接基於 intensity 判斷，加防抖（需持續 min_state_duration 幀才確認狀態變更）。
 
     閾值邏輯：threshold_closed > threshold_open
+    
+    開啟判斷：連續 min_open_duration 幀 intensity < threshold_open 即判斷開啟
+    關閉判斷：連續 min_close_duration 幀 intensity > threshold_closed 即判斷關閉
     """
 
-    def __init__(self, threshold_open: float, threshold_closed: float, min_state_duration: int = 5):
+    def __init__(
+        self,
+        threshold_open: float,
+        threshold_closed: float,
+        min_state_duration: int = 5,
+        min_open_duration: int = 3,
+        min_close_duration: int = 5,
+    ):
         """
         Args:
             threshold_closed: intensity > 此值 → 完全閉合（應為較高值，如 150）
             threshold_open:   intensity < 此值 → 完全開啟（應為較低值，如 80）
-            min_state_duration: 狀態變更前需持續的最小幀數
+            min_state_duration: 狀態變更前需持續的最小幀數（向下相容，已棄用）
+            min_open_duration: 開啟狀態變更前需持續的最小幀數（預設 3）
+            min_close_duration: 關閉狀態變更前需持續的最小幀數（預設 5）
         """
         if threshold_closed <= threshold_open:
             raise ValueError(
@@ -68,7 +80,9 @@ class DrawerStateDetector:
 
         self.threshold_open   = threshold_open
         self.threshold_closed = threshold_closed
-        self.min_state_duration = min_state_duration
+        self.min_state_duration = min_state_duration  # 向下相容
+        self.min_open_duration = min_open_duration
+        self.min_close_duration = min_close_duration
 
         self.current_state = "未知"
         self.state_counter = 0
@@ -94,7 +108,15 @@ class DrawerStateDetector:
         if new_state != self.current_state:
             if self.pending_state == new_state:
                 self.state_counter += 1
-                if self.state_counter >= self.min_state_duration:
+                # 根據目標狀態選擇不同的持續幀數要求
+                if new_state == "完全開啟":
+                    required_duration = self.min_open_duration
+                elif new_state == "完全閉合":
+                    required_duration = self.min_close_duration
+                else:
+                    required_duration = self.min_state_duration
+                
+                if self.state_counter >= required_duration:
                     old_state = self.current_state
                     self.current_state = new_state
                     self.state_counter = 0

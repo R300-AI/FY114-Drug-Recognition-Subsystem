@@ -96,6 +96,8 @@ class VideoCapture:
         threshold_open: float = 80.0,
         threshold_closed: float = 150.0,
         min_state_duration: int = 5,
+        min_open_duration: int = 3,
+        min_close_duration: int = 5,
         roi: Optional[dict] = None,
         smoothing_window: int = 1,
         enable_smoothing: bool = False,
@@ -117,6 +119,8 @@ class VideoCapture:
             threshold_open=threshold_open,
             threshold_closed=threshold_closed,
             min_state_duration=min_state_duration,
+            min_open_duration=min_open_duration,
+            min_close_duration=min_close_duration,
         )
         self._history         = deque(maxlen=history_size)
         self._roi             = roi or {}
