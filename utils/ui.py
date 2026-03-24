@@ -1089,27 +1089,24 @@ class App:
             thickness = 4 if is_highlighted else 2
             cv2.rectangle(overlay, (x1, y1), (x2, y2), color_bgr, thickness)
 
-            # 類別編碼標籤（圓角矩形背景 + 白色文字）
+            # 類別編碼標籤（無背景、置中、大字、粗體）
             label = pill.full_label or "?"
-            font_scale = 0.6 if is_highlighted else 0.5
-            font_thickness = 2 if is_highlighted else 1
+            font_scale = 1.2 if is_highlighted else 1.0  # 放大兩倍
+            font_thickness = 4 if is_highlighted else 3  # 加粗
             (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
             
-            # 標籤位置（左上角）
-            pad = 4
-            lx1 = x1
-            ly1 = y1
-            lx2 = x1 + tw + pad * 2
-            ly2 = y1 + th + pad * 2 + baseline
+            # 計算框框中心位置
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
             
-            # 繪製標籤背景
-            cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), color_bgr, -1)
-            cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), (255, 255, 255), 1)
+            # 文字置中（文字起點需要往左上偏移）
+            text_x = cx - tw // 2
+            text_y = cy + th // 2
             
-            # 繪製標籤文字
+            # 繪製標籤文字（無背景，直接繪製粗體白色文字）
             cv2.putText(
                 overlay, label,
-                (lx1 + pad, ly1 + th + pad),
+                (text_x, text_y),
                 cv2.FONT_HERSHEY_SIMPLEX, font_scale,
                 (255, 255, 255), font_thickness, cv2.LINE_AA,
             )
