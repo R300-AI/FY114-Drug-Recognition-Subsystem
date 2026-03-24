@@ -702,6 +702,9 @@ class App:
             row_data["frame"].destroy()
         self.pill_rows.clear()
         
+        # 清除舊的 hover 追蹤
+        self._clear_hover_tracking()
+        
         bg_color = DRUG_COLORS[category.color_idx]["bg"]
         border_color = DRUG_COLORS[category.color_idx]["border"]
         
@@ -732,9 +735,9 @@ class App:
             ok_btn = self._make_check_btn(row, "正確", "ok", lambda p=page, pi=pill_idx: self._set_pill_dose(p, pi, True))
             ok_btn.pack(side=tk.RIGHT, padx=2)
             
-            # 綁定 hover/click 事件（遞迴綁定所有子元件）
+            # 綁定 hover 事件（使用 Motion 追蹤整個 row 區域）
             detection_idx = pill.detection_idx
-            self._bind_hover_events(row, detection_idx)
+            self._bind_row_hover(row, detection_idx)
             
             self.pill_rows.append({
                 "frame": row,
@@ -745,38 +748,69 @@ class App:
                 "detection_idx": detection_idx,
             })
     
-    def _bind_hover_events(self, widget: tk.Widget, detection_idx: int):
-        """遞迴綁定 hover 事件到 widget 及其所有子元件"""
-        # 綁定當前 widget
-        widget.bind("<Enter>", lambda e, idx=detection_idx: self._on_pill_hover(idx), add="+")
-        widget.bind("<Leave>", lambda e, w=widget, idx=detection_idx: self._on_pill_leave_check(w, idx), add="+")
-        if not isinstance(widget, tk.Button):
-            widget.bind("<Button-1>", lambda e, idx=detection_idx: self._on_pill_click(idx), add="+")
+    def _bind_row_hover(self, row: tk.Frame, detection_idx: int):
+        """使用全域滑鼠追蹤來偵測整個 row 區域的 hover 狀態
         
-        # 遞迴綁定所有子元件
-        for child in widget.winfo_children():
-            self._bind_hover_events(child, detection_idx)
+        這個方法比在每個子元件上綁定 Enter/Leave 更可靠，
+        因為它直接檢查滑鼠座標是否在 row 的邊界內，
+        不會因為元件之間的空隙而失效。
+        """
+        # 儲存 row 的 detection_idx 作為屬性，供全域檢查使用
+        row._detection_idx = detection_idx
+        
+        # 將 row 加入追蹤列表
+        if not hasattr(self, '_hover_tracked_rows'):
+            self._hover_tracked_rows = []
+            # 啟動全域滑鼠追蹤
+            self._start_hover_tracking()
+        
+        self._hover_tracked_rows.append(row)
     
-    def _on_pill_leave_check(self, row_widget: tk.Widget, detection_idx: int):
-        """檢查滑鼠是否真的離開了整個 row（而不是移到子元件上）"""
-        # 延遲檢查，因為 Leave 事件可能在進入子元件前觸發
-        def check():
-            # 如果當前高亮的還是同一個 detection，檢查滑鼠是否還在 row 範圍內
-            if self.state.highlighted_pill == detection_idx:
-                try:
-                    # 取得滑鼠相對於 row 的位置
-                    x = row_widget.winfo_pointerx() - row_widget.winfo_rootx()
-                    y = row_widget.winfo_pointery() - row_widget.winfo_rooty()
-                    w = row_widget.winfo_width()
-                    h = row_widget.winfo_height()
-                    # 如果滑鼠不在 row 範圍內，才取消高亮
-                    if not (0 <= x <= w and 0 <= y <= h):
-                        self.state.highlighted_pill = -1
-                        self._refresh_ai_overlay()
-                except Exception:
-                    pass
-        # 短暫延遲後檢查
-        self.root.after(10, check)
+    def _start_hover_tracking(self):
+        """啟動週期性的滑鼠位置檢查"""
+        def check_hover():
+            if not hasattr(self, '_hover_tracked_rows'):
+                return
+            
+            try:
+                # 取得滑鼠的螢幕座標
+                mouse_x = self.root.winfo_pointerx()
+                mouse_y = self.root.winfo_pointery()
+                
+                # 檢查滑鼠是否在任何追蹤的 row 內
+                hovered_idx = -1
+                for row in self._hover_tracked_rows:
+                    if not row.winfo_exists():
+                        continue
+                    # 取得 row 的螢幕座標範圍
+                    rx = row.winfo_rootx()
+                    ry = row.winfo_rooty()
+                    rw = row.winfo_width()
+                    rh = row.winfo_height()
+                    
+                    if rx <= mouse_x <= rx + rw and ry <= mouse_y <= ry + rh:
+                        hovered_idx = row._detection_idx
+                        break
+                
+                # 只在狀態改變時更新
+                if self.state.highlighted_pill != hovered_idx:
+                    self.state.highlighted_pill = hovered_idx
+                    self._refresh_ai_overlay()
+                    
+            except Exception:
+                pass
+            
+            # 持續追蹤（每 50ms 檢查一次）
+            if hasattr(self, '_hover_tracked_rows') and self._hover_tracked_rows:
+                self.root.after(50, check_hover)
+        
+        # 開始追蹤
+        self.root.after(50, check_hover)
+    
+    def _clear_hover_tracking(self):
+        """清除追蹤列表（切換頁面時呼叫）"""
+        if hasattr(self, '_hover_tracked_rows'):
+            self._hover_tracked_rows.clear()
 
     def _on_pill_hover(self, detection_idx: int):
         """滑鼠移入藥錠列時高亮左側對應藥錠"""
