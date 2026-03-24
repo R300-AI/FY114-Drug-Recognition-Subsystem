@@ -2,6 +2,22 @@
 
 負責將辨識結果自動填寫至「成大第一階段辨識問卷」Excel 檔案。
 支援 .xlsx 和 .xlsm 格式。
+
+Excel 欄位對應（第 3 列為標題列，資料從第 4 列開始）：
+    A: 藥盤序號
+    B: 階段別（固定「第1階段」）
+    C: 測試日期
+    D: 測試人員/紀錄者（留空）
+    E: 情境（留空）
+    F: 條件(光源角度)（留空）
+    G: 藥盤整體判定結果(自動判斷)
+    H: 品項種類
+    I: 總量
+    J: 品項數量
+    K: 問題描述（留空或自動填入）
+    L: 備註（留空）
+    M: raw data（圖片路徑）
+    N~: Pill_1, Pill_2, ... (動態欄位，有幾顆填幾個)
 """
 
 from datetime import datetime
@@ -62,12 +78,12 @@ class ExcelWriter:
         
         print(f"[excel] 已載入: {self.excel_path.name}, 工作表: {self.sheet.title}")
     
-    def find_next_empty_row(self, start_row: int = 2, column: int = 1) -> int:
+    def find_next_empty_row(self, start_row: int = 4, column: int = 1) -> int:
         """找到下一個空白列（用於追加資料）
         
         Args:
-            start_row: 開始搜尋的列號（預設從第 2 列開始，假設第 1 列是標題）
-            column: 檢查的欄位（預設第 1 欄）
+            start_row: 開始搜尋的列號（預設從第 4 列開始，第 3 列是標題）
+            column: 檢查的欄位（預設第 1 欄 - 藥盤序號）
         
         Returns:
             空白列的列號
@@ -88,20 +104,22 @@ class ExcelWriter:
         pills: list,
         name_answers: list[bool | None],
         dose_answers: list[bool | None],
+        image_path: str = "",
         start_row: Optional[int] = None,
     ):
-        """將驗證資料寫入 Excel
+        """將驗證資料寫入 Excel（按照問卷實際欄位結構）
         
         Args:
             tray_id: 藥盤序號
-            timestamp: 時間戳記
-            variety_count: 品項數量
-            variety_correct: 品項是否正確
+            timestamp: 時間戳記（格式：YYYY-MM-DD HH:MM:SS）
+            variety_count: 品項種類數量（不重複藥品數）
+            variety_correct: 品項種類驗證結果
             total_count: 總顆數
-            total_correct: 總數是否正確
-            pills: PillEntry 列表
-            name_answers: 各藥品名稱的正確性
-            dose_answers: 各藥品劑量的正確性
+            total_correct: 總量驗證結果
+            pills: PillEntry 列表（每顆藥一筆）
+            name_answers: 各藥品名稱的驗證結果
+            dose_answers: 各藥品劑量的驗證結果
+            image_path: 圖片路徑（相對於問卷檔案）
             start_row: 寫入的起始列（None 則自動找下一個空白列）
         """
         if start_row is None:
@@ -109,49 +127,92 @@ class ExcelWriter:
         else:
             row = start_row
         
-        # 範例欄位對應（請根據實際問卷調整）
-        # 假設問卷格式：
-        # A: 序號, B: 時間, C: 品項數, D: 品項正確, E: 總數, F: 總數正確, 
-        # G~: 各藥品資訊
+        # A 欄：藥盤序號
+        self.sheet.cell(row, 1, tray_id)
         
-        col = 1  # A 欄
-        self.sheet.cell(row, col, tray_id)  # 藥盤序號
+        # B 欄：階段別（固定值）
+        self.sheet.cell(row, 2, "第1階段")
         
-        col += 1  # B 欄
-        self.sheet.cell(row, col, timestamp)  # 時間戳記
+        # C 欄：測試日期（從 timestamp 取日期部分）
+        try:
+            dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            date_str = dt.strftime("%Y/%m/%d")
+        except:
+            date_str = timestamp.split()[0] if " " in timestamp else timestamp
+        self.sheet.cell(row, 3, date_str)
         
-        col += 1  # C 欄
-        self.sheet.cell(row, col, variety_count)  # 品項數
+        # D~F 欄：測試人員、情境、條件 — 留空（由人工填寫）
+        # self.sheet.cell(row, 4, "")  # 測試人員/紀錄者
+        # self.sheet.cell(row, 5, "")  # 情境
+        # self.sheet.cell(row, 6, "")  # 條件(光源角度)
         
-        col += 1  # D 欄
-        self.sheet.cell(row, col, self._bool_to_text(variety_correct))  # 品項正確性
+        # G 欄：藥盤整體判定結果(自動判斷)
+        # 只有所有驗證項目都是 True 才填「正確」
+        all_correct = (
+            variety_correct is True and
+            total_correct is True and
+            all(ans is True for ans in name_answers) and
+            all(ans is True for ans in dose_answers)
+        )
+        self.sheet.cell(row, 7, "正確" if all_correct else "錯誤")
         
-        col += 1  # E 欄
-        self.sheet.cell(row, col, total_count)  # 總顆數
+        # H 欄：品項種類（正確/錯誤）
+        self.sheet.cell(row, 8, self._bool_to_text(variety_correct))
         
-        col += 1  # F 欄
-        self.sheet.cell(row, col, self._bool_to_text(total_correct))  # 總數正確性
+        # I 欄：總量（正確/錯誤）
+        self.sheet.cell(row, 9, self._bool_to_text(total_correct))
         
-        # 寫入各藥品的詳細資訊（從 G 欄開始）
+        # J 欄：品項數量（正確/錯誤）
+        # 根據範例，這也是填「正確/錯誤」，暫時與 variety_correct 相同
+        # TODO: 確認 J 欄的實際意義
+        self.sheet.cell(row, 10, self._bool_to_text(variety_correct))
+        
+        # K 欄：問題描述 — 如果有錯誤，自動填入錯誤摘要
+        problem_desc = self._generate_problem_description(
+            variety_correct, total_correct, name_answers, dose_answers, pills
+        )
+        if problem_desc:
+            self.sheet.cell(row, 11, problem_desc)
+        
+        # L 欄：備註 — 留空
+        # self.sheet.cell(row, 12, "")
+        
+        # M 欄：raw data — 圖片路徑
+        if image_path:
+            self.sheet.cell(row, 13, image_path)
+        
+        # N 欄起：Pill_1, Pill_2, ... — 有幾顆填幾個欄位
         for i, pill in enumerate(pills):
-            if i < len(name_answers) and i < len(dose_answers):
-                col += 1
-                self.sheet.cell(row, col, pill.name)  # 藥品名稱
-                
-                col += 1
-                self.sheet.cell(row, col, pill.license)  # 許可證字號
-                
-                col += 1
-                self.sheet.cell(row, col, pill.same_count)  # 顆數
-                
-                col += 1
-                self.sheet.cell(row, col, self._bool_to_text(name_answers[i]))  # 名稱正確
-                
-                col += 1
-                self.sheet.cell(row, col, self._bool_to_text(dose_answers[i]))  # 劑量正確
+            col = 14 + i  # N 欄是第 14 欄
+            self.sheet.cell(row, col, pill.name or "未識別")
         
-        print(f"[excel] 資料已寫入第 {row} 列")
+        print(f"[excel] 資料已寫入第 {row} 列（共 {len(pills)} 顆藥品）")
         return row
+    
+    def _generate_problem_description(
+        self,
+        variety_correct: bool | None,
+        total_correct: bool | None,
+        name_answers: list[bool | None],
+        dose_answers: list[bool | None],
+        pills: list,
+    ) -> str:
+        """自動產生問題描述（僅在有錯誤時）"""
+        problems = []
+        
+        if variety_correct is False:
+            problems.append("品項種類錯誤")
+        if total_correct is False:
+            problems.append("總量錯誤")
+        
+        for i, (name_ans, dose_ans, pill) in enumerate(zip(name_answers, dose_answers, pills)):
+            pill_name = pill.name or "未識別"
+            if name_ans is False:
+                problems.append(f"第{i+1}顆({pill_name})品項錯誤")
+            if dose_ans is False:
+                problems.append(f"第{i+1}顆({pill_name})劑量錯誤")
+        
+        return "；".join(problems) if problems else ""
     
     @staticmethod
     def _bool_to_text(value: bool | None) -> str:

@@ -44,7 +44,8 @@ from .excel_writer import ExcelWriter, create_backup, HAS_OPENPYXL
 # ============================================================
 
 RECORDS_DIR = Path("records")
-EXCEL_QUESTIONNAIRE = Path("成大第一階段辨識問卷_1150304建議修改版.xlsx")
+EXCEL_QUESTIONNAIRE_SOURCE = Path("成大第一階段辨識問卷_1150304建議修改版.xlsx")
+EXCEL_QUESTIONNAIRE = RECORDS_DIR / "成大第一階段辨識問卷_1150304建議修改版.xlsx"
 
 # 每種藥品的配色（邊框色、背景色、YOLO覆蓋BGR）
 DRUG_COLORS = [
@@ -203,11 +204,18 @@ class App:
         
         # --- Excel 匯出檢查 ---
         if self._enable_excel_export:
-            if EXCEL_QUESTIONNAIRE.exists():
-                print(f"[excel] 問卷檔案已找到: {EXCEL_QUESTIONNAIRE.name}")
+            # 如果 records 資料夾中沒有問卷檔案，從專案根目錄複製
+            if not EXCEL_QUESTIONNAIRE.exists():
+                if EXCEL_QUESTIONNAIRE_SOURCE.exists():
+                    import shutil
+                    RECORDS_DIR.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(EXCEL_QUESTIONNAIRE_SOURCE, EXCEL_QUESTIONNAIRE)
+                    print(f"[excel] 已複製問卷至 records 資料夾")
+                else:
+                    print(f"[excel] 警告: 找不到問卷檔案: {EXCEL_QUESTIONNAIRE_SOURCE}")
+                    self._enable_excel_export = False
             else:
-                print(f"[excel] 警告: 問卷檔案不存在: {EXCEL_QUESTIONNAIRE}")
-                self._enable_excel_export = False
+                print(f"[excel] 問卷檔案已就緒: {EXCEL_QUESTIONNAIRE}")
         elif not HAS_OPENPYXL:
             print("[excel] openpyxl 未安裝，Excel 匯出功能已停用")
 
@@ -1337,20 +1345,28 @@ class App:
             yaml.dump(yaml_data, f, allow_unicode=True, default_flow_style=False)
         print(f"[save] {yaml_path}")
 
+        # 儲存三種圖片：原始圖、AI 標記圖
         if self._captured_image is not None:
-            img_path = RECORDS_DIR / f"{tray_id}.jpg"
-            cv2.imwrite(str(img_path), self._captured_image)
-            print(f"[save] {img_path}")
+            raw_img_path = RECORDS_DIR / f"{tray_id}_raw.jpg"
+            cv2.imwrite(str(raw_img_path), self._captured_image)
+            print(f"[save] {raw_img_path}")
+        
+        if self._ai_image is not None:
+            ai_img_path = RECORDS_DIR / f"{tray_id}_marked.jpg"
+            cv2.imwrite(str(ai_img_path), self._ai_image)
+            print(f"[save] {ai_img_path}")
         
         # --- Excel 問卷自動填寫 ---
         if self._enable_excel_export:
             try:
-                self._export_to_excel()
+                self._export_to_excel(tray_id)
             except Exception as e:
                 print(f"[excel] 匯出失敗: {e}")
+                import traceback
+                traceback.print_exc()
                 # 不中斷流程，只記錄錯誤
     
-    def _export_to_excel(self):
+    def _export_to_excel(self, tray_id: str):
         """將驗證結果匯出至 Excel 問卷"""
         if not EXCEL_QUESTIONNAIRE.exists():
             print(f"[excel] 問卷檔案不存在: {EXCEL_QUESTIONNAIRE}")
@@ -1374,6 +1390,7 @@ class App:
                 pills=self.state.pills,
                 name_answers=self.state.name_answers,
                 dose_answers=self.state.dose_answers,
+                image_path=f"{tray_id}_raw.jpg"  # 相對於 Excel 檔案的路徑
             )
             
             # 儲存
