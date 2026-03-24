@@ -1524,11 +1524,19 @@ class App:
             else:
                 return "⚠ 未填", "#cc0000"
 
-        def add_row(parent, label_txt: str, value: bool | None, bg: str):
+        def add_row(parent, label_txt: str, value: bool | None, bg: str, color_indicator: str | None = None):
+            """新增一列，可選擇性加上顏色圖示"""
             row = tk.Frame(parent, bg=bg)
             row.pack(fill=tk.X, padx=0, pady=1)
+            
+            # 顏色小圖示（如果有提供）
+            if color_indicator:
+                indicator = tk.Frame(row, bg=color_indicator, width=16, height=16)
+                indicator.pack(side=tk.LEFT, padx=(8, 4), pady=4)
+                indicator.pack_propagate(False)
+            
             tk.Label(row, text=label_txt, font=FONT_NORMAL, bg=bg,
-                     anchor=tk.W, width=24).pack(side=tk.LEFT, padx=8, pady=4)
+                     anchor=tk.W).pack(side=tk.LEFT, padx=(8 if not color_indicator else 0, 8), pady=4)
             ans_txt, ans_col = answer_style(value)
             tk.Label(row, text=ans_txt, font=FONT_BOLD, bg=bg,
                      fg=ans_col).pack(side=tk.RIGHT, padx=8)
@@ -1555,11 +1563,11 @@ class App:
             # 名稱核對
             add_row(inner, "　　名稱核對", self.state.name_answers[cat_idx] if cat_idx < len(self.state.name_answers) else None, drug_bg)
             
-            # 每顆藥錠的數量核對
+            # 每顆藥錠的數量核對（加上顏色圖示）
             dose_answers_for_cat = self.state.dose_answers[cat_idx] if cat_idx < len(self.state.dose_answers) else []
             for pill_idx, pill in enumerate(category.pills):
                 ans = dose_answers_for_cat[pill_idx] if pill_idx < len(dose_answers_for_cat) else None
-                add_row(inner, f"　　{pill.full_label} 數量核對", ans, drug_bg)
+                add_row(inner, f"{pill.full_label} 數量核對", ans, drug_bg, color_indicator=c["border"])
             
             # 小計
             tk.Label(inner, text=f"　　共計 {category.total_count} 顆", 
@@ -1595,6 +1603,7 @@ class App:
         def do_submit():
             modal_destroy()
             self._save_results()
+            self._show_toast("儲存完成")
             self._reset_state()
 
         tk.Button(btn_frame, text="重新回饋", font=FONT_BTN,
@@ -1612,6 +1621,32 @@ class App:
                   fg="white",
                   state=tk.NORMAL if all_filled else tk.DISABLED,
                   command=do_submit).pack(side=tk.RIGHT)
+
+    def _show_toast(self, message: str, duration_ms: int = 2000):
+        """顯示浮動提示訊息，幾秒後自動消失"""
+        toast = tk.Toplevel(self.root)
+        toast.overrideredirect(True)  # 無邊框視窗
+        toast.attributes("-topmost", True)
+        
+        # 設定樣式
+        frame = tk.Frame(toast, bg=COLOR_SUCCESS, padx=20, pady=12)
+        frame.pack()
+        tk.Label(
+            frame, text=message,
+            bg=COLOR_SUCCESS, fg="white",
+            font=("Microsoft JhengHei", 14, "bold")
+        ).pack()
+        
+        # 置中於主視窗
+        toast.update_idletasks()
+        tw = toast.winfo_width()
+        th = toast.winfo_height()
+        rx = self.root.winfo_x() + (self.root.winfo_width() - tw) // 2
+        ry = self.root.winfo_y() + (self.root.winfo_height() - th) // 2
+        toast.geometry(f"+{rx}+{ry}")
+        
+        # 自動消失
+        toast.after(duration_ms, toast.destroy)
 
     def _show_info_modal(self, title: str, message: str):
         """一般提示 Modal（只有關閉按鈕）"""
