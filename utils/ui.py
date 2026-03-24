@@ -1688,12 +1688,32 @@ class App:
             "pills": {},
         }
         for i, pill in enumerate(self.state.pills):
+            # 找出該藥錠所屬的類別索引和類別內索引
+            cat_idx = -1
+            pill_idx_in_cat = -1
+            for c_idx, cat in enumerate(self.state.categories):
+                for p_idx, p in enumerate(cat.pills):
+                    if p.detection_idx == pill.detection_idx:
+                        cat_idx = c_idx
+                        pill_idx_in_cat = p_idx
+                        break
+                if cat_idx >= 0:
+                    break
+            
+            # 取得對應的答案
+            name_correct = self.state.name_answers[cat_idx] if 0 <= cat_idx < len(self.state.name_answers) else None
+            dose_correct = None
+            if 0 <= cat_idx < len(self.state.dose_answers):
+                cat_doses = self.state.dose_answers[cat_idx]
+                if 0 <= pill_idx_in_cat < len(cat_doses):
+                    dose_correct = cat_doses[pill_idx_in_cat]
+            
             yaml_data["pills"][f"pill_{i+1}"] = {
                 "license": pill.license,
                 "name": pill.name,
                 "same_count": pill.same_count,
-                "name_correct": self.state.name_answers[i],
-                "dose_correct": self.state.dose_answers[i],
+                "name_correct": name_correct,
+                "dose_correct": dose_correct,
             }
 
         yaml_path = RECORDS_DIR / f"{tray_id}.yaml"
