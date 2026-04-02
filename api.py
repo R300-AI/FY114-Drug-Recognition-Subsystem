@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """api.py — FY114 藥物辨識推論伺服器
 
-Endpoints:
-    GET  /health      健康檢查
+Endpoint:
     POST /analyse     影像辨識（multipart form: image=<file>）
 
 啟動:
@@ -16,10 +15,24 @@ import cv2
 import numpy as np
 from flask import Flask, jsonify, request
 
+# ── 檢測 DirectML (Ryzen iGPU) ──
+import torch
+
+_device = "cpu"
+try:
+    import torch_directml
+    _device = torch_directml.device()
+    print(f"[api] 🚀 DirectML GPU detected")
+except ImportError:
+    print("[api] torch-directml not installed, using CPU")
+    print("[api] Install: pip install torch-directml")
+except Exception as e:
+    print(f"[api] DirectML unavailable ({e}), using CPU")
+
 from utils.models import YOLODetector, ResNet34Encoder, Top1Matcher
 from utils.gallery import Gallery
 
-# ── 固定路徑（Docker 內掛載位置）──
+# ── 固定路徑 ──
 _MODEL_PATH   = "src/best.pt"
 _GALLERY_PATH = "src/gallery"
 _DRUG_DB_PATH = "DrugTW2025.csv"
@@ -55,7 +68,7 @@ _gallery = Gallery(_GALLERY_PATH)
 _gallery.load()
 print(f"[api] Gallery: {_gallery.size} entries")
 
-_detector = YOLODetector(_MODEL_PATH)
+_detector = YOLODetector(_MODEL_PATH, device=_device)
 _encoder  = ResNet34Encoder()
 _matcher  = Top1Matcher(_gallery)
 print("[api] Ready")
@@ -69,12 +82,7 @@ def _mask_to_b64(mask: np.ndarray | None) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
-# ── Endpoints ──
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok", "gallery_size": _gallery.size})
-
-
+# ── Endpoint ──
 @app.route("/analyse", methods=["POST"])
 def analyse():
     import time

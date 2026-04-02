@@ -324,13 +324,8 @@ class App:
 
     def _init_drawer_sensor(self):
         if self._debug:
-            print("[drawer] Debug mode: sensor skipped — press Space to simulate close")
-            self.root.bind("<space>", lambda e: self._on_drawer_closed())
-            # 啟動模擬串流 loop（讓 terminal 可看到假資料在跑）
-            self._drawer_running = True
-            self._drawer_thread = threading.Thread(
-                target=self._debug_drawer_loop, daemon=True)
-            self._drawer_thread.start()
+            print("[drawer] Debug mode: sensor skipped — press Space to simulate drawer open/close cycle")
+            self.root.bind("<space>", lambda e: self._debug_drawer_cycle())
             return
 
         cfg_path = Path("config/drawer_config.yaml")
@@ -373,18 +368,6 @@ class App:
         except Exception as e:
             print(f"[drawer] Init failed: {e} — auto-trigger disabled")
             self._drawer_cap = None
-
-    def _debug_drawer_loop(self):
-        """Debug 模式：模擬持續串流輸出（正弦波強度，不觸發分析）"""
-        import math
-        t = 0
-        while self._drawer_running:
-            intensity = 60.0 + 40.0 * math.sin(t * 0.05)  # 20~100，永遠開啟區間
-            state = "完全開啟"
-            print(f"[drawer] state={state:<6}  intensity={intensity:6.1f}  [debug sim]",
-                  flush=True)
-            t += 1
-            time.sleep(0.1)
 
     def _start_drawer_monitoring(self):
         self._drawer_running = True
@@ -463,6 +446,20 @@ class App:
                         # _reset_state 內部會呼叫 _update_badge，顯示「請關閉抽屜」
                 else:
                     self._drawer_consecutive_opened = 0
+
+    def _debug_drawer_cycle(self):
+        """Debug 模式：模擬快速的抽屜開關循環並觸發分析"""
+        print("[drawer] ──── 模擬抽屜開啟 ────", flush=True)
+        print("[drawer] state=完全開啟  intensity=100.0  [debug]", flush=True)
+        # 短暫延遲後模擬關閉
+        self.root.after(300, self._debug_drawer_close)
+    
+    def _debug_drawer_close(self):
+        """Debug 模式：完成關閉動作並觸發分析"""
+        print("[drawer] ──── 模擬抽屜關閉 ────", flush=True)
+        print("[drawer] state=完全閉合  intensity=  0.0  [debug]", flush=True)
+        print("[drawer] 觸發分析...", flush=True)
+        self._on_drawer_closed()
 
     def _on_drawer_closed(self):
         """抽屜閉合事件（主執行緒）— 直接呼叫分析，UI 在分析期間暫停回應"""
@@ -1483,8 +1480,7 @@ class App:
         modal.resizable(False, False)
         modal.grab_set()
         modal.transient(self.root)
-        self._center_window(modal, MODAL_W, MODAL_H)
-        modal.geometry(f"{MODAL_W}x{MODAL_H}")
+        self._center_window(modal, MODAL_W, MODAL_H, align_top=True)
 
         tk.Label(modal, text="填報總覽", font=FONT_TITLE).pack(
             anchor=tk.W, padx=16, pady=(12, 2))
@@ -1665,10 +1661,23 @@ class App:
         tk.Button(modal, text="關閉", font=FONT_BTN, bg="#111", fg="white",
                   width=8, command=modal.destroy).pack(pady=8)
 
-    def _center_window(self, win: tk.Toplevel, w: int, h: int):
+    def _center_window(self, win: tk.Toplevel, w: int, h: int, align_top: bool = False):
+        """定位視窗
+        
+        Args:
+            win: 要定位的視窗
+            w: 視窗寬度
+            h: 視窗高度
+            align_top: True=對齊主視窗上界，False=置中（預設）
+        """
         self.root.update_idletasks()
         rx = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-        ry = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        if align_top:
+            # 對齊主視窗上界，保留 10 像素間距
+            ry = self.root.winfo_y() + 10
+        else:
+            # 垂直置中（原行為）
+            ry = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
         win.geometry(f"{w}x{h}+{rx}+{ry}")
 
     # --------------------------------------------------------

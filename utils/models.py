@@ -43,9 +43,10 @@ class YOLODetector(BaseDetector):
 
     min_area = 100  # 最小有效面積（px²），可繼承後覆寫
 
-    def __init__(self, model_path: str | Path = "src/best.pt", conf: float = 0.25):
+    def __init__(self, model_path: str | Path = "src/best.pt", conf: float = 0.25, device="cpu"):
         self.model_path = Path(model_path)
         self._conf = conf
+        self._device = device
         self._model = None  # 延遲載入
 
     def _ensure_loaded(self) -> bool:
@@ -57,6 +58,9 @@ class YOLODetector(BaseDetector):
         try:
             from ultralytics import YOLO
             self._model = YOLO(str(self.model_path), verbose=False)
+            # 移動模型到指定設備
+            self._model.to(self._device)
+            print(f"[detector] Model loaded on device: {self._device}")
             return True
         except Exception as e:
             print(f"[detector] Load error: {e}")
@@ -67,7 +71,7 @@ class YOLODetector(BaseDetector):
         if not self._ensure_loaded():
             return []
         try:
-            results = self._model.predict(source=image, conf=self._conf, verbose=False)
+            results = self._model.predict(source=image, conf=self._conf, verbose=False, device=self._device)
             if not results or results[0].masks is None:
                 return []
 
