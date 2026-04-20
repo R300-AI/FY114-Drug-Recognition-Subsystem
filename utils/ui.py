@@ -1,4 +1,4 @@
-"""utils/ui.py — FY114 Tkinter GUI 應用程式
+"""utils/ui.py — FY115 Tkinter GUI 應用程式
 
 此模組包含完整的 Tkinter UI 邏輯：
   - App 類別（主視窗、相機、分析流水線、填報邏輯）
@@ -8,7 +8,7 @@
 
 run.py 只需：
     from utils.ui import App
-    App(root, api_url=..., fullscreen=..., debug=...)
+    App(root, segment_url=..., encoder_url=..., timeout=..., fullscreen=..., debug=...)
     root.mainloop()
 """
 
@@ -36,7 +36,6 @@ try:
 except (ImportError, NotImplementedError):
     HAS_LED = False
 
-from . import analyser
 from .types import Detection, MatchResult
 from .excel_writer import ExcelWriter, create_backup, HAS_OPENPYXL
 
@@ -184,6 +183,7 @@ class App:
         timeout: int = 30,
         fullscreen: bool = False,
         debug: bool = False,
+        demo: bool = False,
         default_verification: bool | None = True,
         enable_excel_export: bool = True,
     ):
@@ -192,6 +192,8 @@ class App:
         self._encoder_url = encoder_url.rstrip("/")
         self._timeout = timeout
         self._debug  = debug
+        self._demo   = demo  # 硬體不完整時自動啟用；API 推論仍呼叫，但觸發與拍攝改用模擬
+        self._demo_auto = False  # 是否為硬體不完整自動切換（展示通知用）
         self._default_verification = default_verification  # 預設驗證狀態（True=正確, False=錯誤, None=未選）
         self._enable_excel_export = enable_excel_export and HAS_OPENPYXL  # Excel 匯出功能
 
@@ -237,13 +239,47 @@ class App:
 
         # 暖機完成前隱藏視窗，避免使用者看到未就緒的 UI
         self.root.withdraw()
+        self._show_startup_splash()
 
         # --- 建 UI ---
         self._build_ui()
 
         # --- 初始化（含感測器暖機，blocking）---
+        self._update_splash("正在初始化相機…")
         self._init_camera()
+        self._update_splash("正在初始化抽屜感測器…")
         self._init_drawer_sensor()
+
+        # 硬體完整性檢查：任一不可得 → 自動切換 Demo 模式
+        if not self._debug and not self._demo:
+            hw_missing = (
+                self._camera is None
+                or self._drawer_cap is None
+                or self.led_pixels is None
+            )
+            if hw_missing:
+                self._demo = True
+                self._demo_auto = True
+                missing = []
+                if self._camera is None:    missing.append("Pi Camera")
+                if self._drawer_cap is None: missing.append("抽屜感測器")
+                if self.led_pixels is None:  missing.append("光箱光源")
+                self._update_splash(f"部分硬體未就緒，切換至展示模式…")
+                print(f"[init] 硬體不完整（{', '.join(missing)}）→ 自動切換 Demo 模式")
+                print("[init] Demo 模式：觸發改用空白鍵，拍攝改用樣本圖，API 推論仍正常呼叫")
+
+        # Demo 模式且感測器不可用 → 綁定空白鍵觸發
+        if self._demo and self._drawer_cap is None:
+            self.root.bind("<space>", lambda e: self._debug_drawer_cycle())
+            print("[drawer] Demo 模式：按空白鍵模擬抽屜觸發")
+
+        # API 可用性檢查（debug 模式不需要 API，跳過）
+        if not self._debug:
+            self._update_splash("正在連接 AI 辨識服務…")
+            self._check_api_or_abort()
+
+        self._close_splash()
+
         self._update_tray_id()
         self._reset_state()   # 確保 UI 為 IDLE 狀態
         
@@ -269,6 +305,84 @@ class App:
 
         # 所有初始化完成 → 顯示視窗
         self.root.deiconify()
+
+        # Demo 模式自動觸發時，說明當前狀態
+        if self._demo_auto:
+            self.root.after(300, self._show_demo_mode_notice)
+
+    # --------------------------------------------------------
+    # 啟動小視窗
+    # --------------------------------------------------------
+
+    def _show_startup_splash(self):
+        """顯示無邊框啟動進度視窗。"""
+        s = tk.Toplevel(self.root)
+        s.overrideredirect(True)
+        s.resizable(False, False)
+        w, h = 380, 110
+        sw, sh = s.winfo_screenwidth(), s.winfo_screenheight()
+        s.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+        s.configure(bg="#1a1a2e")
+        tk.Label(s, text="AI 藥品輔助辨識",
+                 font=("Arial", 16, "bold"), fg="white", bg="#1a1a2e").pack(pady=(18, 4))
+        self._splash_label = tk.Label(s, text="系統啟動中…",
+                                      font=("Arial", 10), fg="#aaaaaa", bg="#1a1a2e")
+        self._splash_label.pack()
+        self._splash = s
+        s.update()
+
+    def _update_splash(self, msg: str):
+        """更新啟動視窗的狀態文字。"""
+        if hasattr(self, "_splash_label") and self._splash_label.winfo_exists():
+            self._splash_label.config(text=msg)
+            self._splash.update()
+
+    def _close_splash(self):
+        """關閉啟動視窗。"""
+        if hasattr(self, "_splash") and self._splash.winfo_exists():
+            self._splash.destroy()
+
+    def _show_demo_mode_notice(self):
+        """Demo 模式自動觸發時，向使用者說明當前狀態。"""
+        import tkinter.messagebox as mb
+        mb.showinfo(
+            "展示模式",
+            "部分硬體未能正常啟動，系統已自動切換至展示模式。\n\n"
+            "• AI 辨識功能正常（仍連線至遠端服務）\n"
+            "• 請按鍵盤空白鍵模擬抽屜開關以觸發辨識\n\n"
+            "如需完整功能，請確認硬體連接後重新啟動。"
+        )
+        # Windows 上 mb.showinfo 被空白鍵 dismiss 時，該 space event 會 leak
+        # 進 root binding，意外觸發第一次分析。延遲 300ms 重新綁定可吸收此洩漏。
+        self.root.unbind("<space>")
+        self.root.after(300, lambda: self.root.bind("<space>", lambda e: self._debug_drawer_cycle()))
+
+    # --------------------------------------------------------
+    # API 可用性檢查
+    # --------------------------------------------------------
+
+    def _check_api_or_abort(self):
+        """確認 Segment API 與 Encoder API 皆可連線；不可得則顯示錯誤對話框並終止程式。"""
+        from . import analyser
+        try:
+            analyser.check_reachable(self._segment_url, self._encoder_url, timeout=5)
+            print(f"[api] 連線正常：{self._segment_url}  {self._encoder_url}")
+        except Exception as e:
+            print(f"[api] 無法連線：{e}")
+            self._close_splash()
+            self.root.deiconify()
+            import tkinter.messagebox as mb
+            mb.showerror(
+                "無法連線至 AI 辨識服務",
+                "系統啟動失敗：無法連線至 AI 辨識服務。\n\n"
+                "請確認：\n"
+                "• 設備已正常連接網路\n"
+                "• AI Search Platform 主機已開機且服務正在執行\n\n"
+                "如問題持續，請聯絡系統管理員。\n"
+                f"（技術資訊：{self._segment_url} 無回應）"
+            )
+            self.root.destroy()
+            raise SystemExit(1)
 
     # --------------------------------------------------------
     # LED
@@ -453,7 +567,11 @@ class App:
                     self._drawer_consecutive_opened = 0
 
     def _debug_drawer_cycle(self):
-        """Debug 模式：模擬快速的抽屜開關循環並觸發分析"""
+        """Demo/Debug 模式：模擬快速的抽屜開關循環並觸發分析"""
+        if self._is_analysed:
+            # 前一次辨識尚未確認送出，忽略此次觸發
+            print("[drawer] 尚未確認送出，忽略空白鍵", flush=True)
+            return
         print("[drawer] ──── 模擬抽屜開啟 ────", flush=True)
         print("[drawer] state=完全開啟  intensity=100.0  [debug]", flush=True)
         # 短暫延遲後模擬關閉
@@ -472,7 +590,7 @@ class App:
 
     def _capture_single_frame(self) -> np.ndarray | None:
         """拍攝一幀。Picamera2 在 init 時已啟動並持續運行，直接 capture_array()。回傳 BGR (H,W,3) 或 None"""
-        if self._debug:
+        if self._debug or (self._demo and self._camera is None):
             sample_path = Path("src/sample/sample.jpg")
             if sample_path.exists():
                 img = cv2.imread(str(sample_path))
@@ -814,7 +932,7 @@ class App:
     def _clear_hover_tracking(self):
         """清除追蹤列表（切換頁面時呼叫）"""
         if hasattr(self, '_hover_tracked_rows'):
-            self._hover_tracked_rows.clear()
+            del self._hover_tracked_rows  # 刪除屬性，下次 _bind_row_hover 會重新啟動 loop
 
     def _on_pill_hover(self, detection_idx: int):
         """滑鼠移入藥錠列時高亮左側對應藥錠"""
@@ -980,8 +1098,9 @@ class App:
         return detections
 
     def _call_api(self, frame: np.ndarray) -> tuple[list[Detection], list[MatchResult | None]]:
-        """直接呼叫 AI 平台 Segment/Encoder API，回傳重建後的 Detection 與 MatchResult 列表。"""
-        data = analyser.analyse(frame, self._segment_url, self._encoder_url, self._timeout)
+        """呼叫 AI Search Platform 的 Segment API 與 Encoder API，回傳重建後的 Detection 與 MatchResult 列表。"""
+        from . import analyser
+        data = analyser.analyse(frame, self._segment_url, self._encoder_url, timeout=self._timeout)
 
         detections: list[Detection] = []
         results:    list[MatchResult | None] = []
@@ -1065,16 +1184,11 @@ class App:
                 results    = self._debug_fake_results(len(detections))
             else:
                 detections, results = self._call_api(frame)
-        except requests.exceptions.RequestException as _conn_err:
-            print(f"[analyse] API connection failed: {_conn_err}")
+        except requests.exceptions.ConnectionError:
+            print("[analyse] API connection failed")
             self._update_badge()
             self._show_info_modal(
-                "連線錯誤",
-                "無法連線至 AI 辨識服務。\n\n"
-                "請確認：\n"
-                "• 設備已正常連接網路\n"
-                "• AI Search Platform 主機已開機且服務正在執行\n\n"
-                f"（技術資訊：{self._segment_url} 無回應）")
+                "連線錯誤", f"無法連線至推論伺服器 {self._segment_url}\n請確認 AI Search Platform 服務正在執行。")
             return
         except Exception as e:
             print(f"[analyse] Error: {e}")

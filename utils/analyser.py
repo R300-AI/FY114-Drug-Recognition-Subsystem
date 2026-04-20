@@ -8,12 +8,44 @@
     check_reachable(segment_url, encoder_url, timeout)  → None（失敗時 raise）
 """
 
+import base64
 import io
 import time
 
 import cv2
 import numpy as np
 import requests
+
+
+# ── mask 工具 ─────────────────────────────────────────────────
+
+def _rle_to_mask(rle: dict) -> np.ndarray | None:
+    """將 RLE 格式（Segment API 回傳）解碼為 0/1 二值 numpy mask。
+
+    格式：{"size": [H, W], "counts": [run0, run1, ...]}
+    counts[0] 從值 0 開始，交替代表 0 和 1 的連續長度。
+    """
+    try:
+        h, w = rle["size"]
+        flat = np.zeros(h * w, dtype=np.uint8)
+        pos, val = 0, 0
+        for run_len in rle["counts"]:
+            if val == 1:
+                flat[pos:pos + run_len] = 1
+            pos += run_len
+            val ^= 1
+        return flat.reshape(h, w)
+    except Exception as e:
+        print(f"[analyser] RLE decode failed: {e}", flush=True)
+        return None
+
+
+def _mask_to_b64(mask: np.ndarray | None) -> str:
+    """將 0/1 二值 mask 轉為 PNG base64 字串（供 ui.py 解碼疊加顯示）。"""
+    if mask is None:
+        return ""
+    _, buf = cv2.imencode(".png", (mask * 255).astype(np.uint8))
+    return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
 def analyse(
@@ -44,7 +76,7 @@ def analyse(
     seg_resp = requests.post(
         f"{segment_url.rstrip('/')}/v1/segment/predict",
         files={"file": ("frame.jpg", io.BytesIO(buf.tobytes()), "image/jpeg")},
-        data={"confidence": "0.25"},
+        data={"confidence": "0.25", "include_mask_rle": "true"},
         timeout=timeout,
     )
     seg_resp.raise_for_status()
@@ -97,7 +129,7 @@ def analyse(
 
         pills.append({
             "bbox":           det["bbox"],
-            "mask_b64":       "",
+            "mask_b64":       _mask_to_b64(_rle_to_mask(det["mask_rle"])) if det.get("mask_rle") else "",
             "confidence":     round(float(det["confidence"]), 4),
             "class_id":       int(det["class_id"]),
             "license_number": lic,

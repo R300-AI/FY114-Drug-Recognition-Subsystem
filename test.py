@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hardware / API Test Runner for FY114 Drug Recognition Subsystem
+Hardware / API Test Runner for Drug-Recognition-Subsystem
 
 Usage:
     python test.py --picam --light --drawer --api
@@ -9,21 +9,11 @@ Options:
     --picam   Test Raspberry Pi Camera Module (Picamera2)
     --light   Test WS2812 LED Ring Light
     --drawer  Test MN96100C 2.5D Sensor + Depth Analysis
-    --api     Test AI pipeline (API config read from api.yaml)
+    --api     Test remote FY115 Segment/Encoder API connectivity
 """
 
 import sys
 import argparse
-from pathlib import Path
-
-try:
-    import yaml
-    _cfg_path = Path(__file__).parent / "api.yaml"
-    _cfg = yaml.safe_load(_cfg_path.read_text(encoding="utf-8")) if _cfg_path.exists() else {}
-except ImportError:
-    _cfg = {}
-
-import numpy as np
 
 
 # ANSI color codes
@@ -183,47 +173,85 @@ def test_drawer() -> bool:
         return False
 
 
-
 # ============================================================
-# API Test
+# Remote API Test
 # ============================================================
 
 def test_api(segment_url: str, encoder_url: str) -> bool:
-    """Test the full AI pipeline directly against Segment and Encoder APIs."""
+    """Test remote FY115 Segment API and Encoder API connectivity."""
     import cv2
-    import numpy as np
     import requests
-    from utils.analyser import analyse, check_reachable
+    from pathlib import Path
 
-    log(f"  ↳ Checking Segment API at {segment_url}/healthz...")
-    log(f"  ↳ Checking Encoder API at {encoder_url}/healthz...")
-    try:
-        check_reachable(segment_url, encoder_url, timeout=5)
-        log(f"  ↳ Segment API is up ✓")
-        log(f"  ↳ Encoder API is up ✓")
-    except requests.exceptions.RequestException as e:
-        log(f"  ↳ API not reachable: {e}")
+    seg_url = segment_url.rstrip("/")
+    enc_url = encoder_url.rstrip("/")
+    timeout = 10
+
+    log(f"  ↳ Segment API: {seg_url}")
+    log(f"  ↳ Encoder API: {enc_url}")
+
+    # Step 1: healthz
+    log("  ↳ GET /healthz (Segment)...")
+    r = requests.get(f"{seg_url}/healthz", timeout=timeout)
+    if r.status_code != 200 or r.json().get("status") != "ok":
+        log(f"  ↳ Segment healthz failed: {r.status_code} {r.text}")
         return False
+    log("  ↳ Segment /healthz OK ✓")
 
-    log("  ↳ Sending test image to Segment → Encoder pipeline...")
-    try:
-        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.rectangle(dummy, (100, 100), (300, 380), (200, 200, 200), -1)
-        data = analyse(dummy, segment_url, encoder_url, timeout=60)
-    except requests.exceptions.RequestException as e:
-        log(f"  ↳ Pipeline request failed: {e}")
+    log("  ↳ GET /healthz (Encoder)...")
+    r = requests.get(f"{enc_url}/healthz", timeout=timeout)
+    if r.status_code != 200 or r.json().get("status") != "ok":
+        log(f"  ↳ Encoder healthz failed: {r.status_code} {r.text}")
         return False
+    log("  ↳ Encoder /healthz OK ✓")
 
-    if data.get("status") != "ok":
-        log(f"  ↳ Unexpected response: {data}")
+    # Step 2: 用 sample 圖測試 Segment API
+    sample_path = Path("src/sample/sample.jpg")
+    if not sample_path.exists():
+        log("  ↳ src/sample/sample.jpg not found, skipping predict test")
+        return True
+
+    log("  ↳ POST /v1/segment/predict (Segment)...")
+    with open(sample_path, "rb") as f:
+        r = requests.post(
+            f"{seg_url}/v1/segment/predict",
+            files={"file": ("sample.jpg", f, "image/jpeg")},
+            data={"include_mask_rle": "true"},
+            timeout=timeout,
+        )
+    if r.status_code != 200:
+        log(f"  ↳ Segment predict failed: {r.status_code}")
         return False
+    seg_data = r.json()
+    count = seg_data.get("count", 0)
+    log(f"  ↳ Segment predict OK: {count} detections ✓")
 
-    pills = data.get("pills", [])
-    log(f"  ↳ Pipeline response: status=ok  pills={len(pills)} ✓")
-    for i, p in enumerate(pills):
-        log(f"  ↳   [{i+1}] {p.get('name', '?')}  score={p.get('score', 0):.4f}  lic={p.get('license_number', '?')}")
+    if count == 0:
+        log("  ↳ No detections in sample image, skipping Encoder test")
+        return True
 
-    log("  ↳ API pipeline test passed ✓")
+    # Step 3: 裁切第一個 detection 測試 Encoder API
+    log("  ↳ POST /v1/encoder/encode (Encoder)...")
+    frame = cv2.imread(str(sample_path))
+    x1, y1, x2, y2 = seg_data["detections"][0]["bbox"]
+    crop = frame[y1:y2, x1:x2]
+    _, buf = cv2.imencode(".jpg", crop)
+    r = requests.post(
+        f"{enc_url}/v1/encoder/encode",
+        files={"file": ("crop.jpg", buf.tobytes(), "image/jpeg")},
+        timeout=timeout,
+    )
+    if r.status_code != 200:
+        log(f"  ↳ Encoder encode failed: {r.status_code}")
+        return False
+    results = r.json().get("results", [])
+    if not results:
+        log("  ↳ Encoder returned empty results")
+        return False
+    top = results[0]
+    log(f"  ↳ Encoder encode OK: top-1 score={top['score']:.4f}  "
+        f"name={top.get('中文品名', '')} ✓")
+
     return True
 
 
@@ -232,27 +260,36 @@ def test_api(segment_url: str, encoder_url: str) -> bool:
 # ============================================================
 
 def main():
-    _segment_url = _cfg.get('segment_url', 'http://192.168.50.1:8001')
-    _encoder_url = _cfg.get('encoder_url', 'http://192.168.50.1:8002')
-
     parser = argparse.ArgumentParser(
-        description='Test hardware and AI API pipeline of the FY114 Drug Recognition Subsystem',
+        description='Test hardware and API components of the Drug-Recognition-Subsystem',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python test.py --picam --light --drawer --api   # All tests
-  python test.py --picam --drawer                 # Hardware only
-  python test.py --api                            # API pipeline only
+  python test.py --api                            # API connectivity only (no hardware required)
+  python test.py --picam --drawer                 # Hardware tests only
         """
     )
-    parser.add_argument('--picam',   action='store_true', help='Test Raspberry Pi Camera Module')
-    parser.add_argument('--light',   action='store_true', help='Test WS2812 LED Ring Light')
-    parser.add_argument('--drawer',  action='store_true', help='Test MN96100C 2.5D Sensor + Depth Analysis')
-    parser.add_argument('--api',     action='store_true', help='Test AI pipeline (config from api.yaml)')
+    parser.add_argument('--picam',  action='store_true', help='Test Raspberry Pi Camera Module')
+    parser.add_argument('--light',  action='store_true', help='Test WS2812 LED Ring Light')
+    parser.add_argument('--drawer', action='store_true', help='Test MN96100C 2.5D Sensor + Depth Analysis')
+    parser.add_argument('--api',    action='store_true', help='Test remote FY115 Segment/Encoder API')
+
+    # 預設值從 api.yaml 讀取，讓 test.py 與 run.py 保持一致
+    try:
+        import yaml
+        from pathlib import Path
+        _cfg = yaml.safe_load(Path(__file__).parent.joinpath('api.yaml').read_text(encoding='utf-8'))
+    except Exception:
+        _cfg = {}
+    parser.add_argument('--segment-url', default=_cfg.get('segment_url', 'http://192.168.50.1:8001'),
+                        help='Segment API 位址（預設讀自 api.yaml）')
+    parser.add_argument('--encoder-url', default=_cfg.get('encoder_url', 'http://192.168.50.1:8002'),
+                        help='Encoder API 位址（預設讀自 api.yaml）')
 
     args = parser.parse_args()
 
-    if not any([args.picam, args.light, args.drawer, args.api]):
+    if not any(v for k, v in vars(args).items() if k not in ('segment_url', 'encoder_url')):
         parser.print_help()
         print(f"\n{Colors.RED}Error: Please specify at least one test option.{Colors.RESET}\n")
         sys.exit(1)
@@ -268,10 +305,8 @@ Examples:
     if args.drawer:
         results['2.5D Sensor'] = run_test('MN96100C 2.5D Sensor + Depth Analysis', test_drawer)
     if args.api:
-        results['AI API Pipeline'] = run_test(
-            'AI API Pipeline (Segment + Encoder)',
-            lambda: test_api(_segment_url, _encoder_url),
-        )
+        results['Remote API'] = run_test('FY115 Segment + Encoder API',
+                                         lambda: test_api(args.segment_url, args.encoder_url))
 
     print(f"\n{Colors.BLUE}{Colors.BOLD}{'='*60}{Colors.RESET}")
     print(f"{Colors.BLUE}{Colors.BOLD} Test Summary{Colors.RESET}")

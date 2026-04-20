@@ -1,0 +1,43 @@
+pills:
+  pill_1:
+    dose_correct: true
+    license: 衛署藥製字第042948號
+    name: '"健亞"  健得靜錠０．２５毫克（三氮二氮平）'
+    name_correct: true
+    same_count: 3
+  pill_2:
+    dose_correct: true
+    license: 衛署藥製字第024132號
+    name: '"中國化學" 安蒙西林膠囊500毫克'
+    name_correct: true
+    same_count: 1
+  pill_3:
+    dose_correct: true
+    license: 衛署藥製字第042948號
+    name: '"健亞"  健得靜錠０．２５毫克（三氮二氮平）'
+    name_correct: true
+    same_count: 3
+  pill_4:
+    dose_correct: true
+    license: 衛署藥製字第041454號
+    name: '"井田"舒管錠2.5毫克(硫酸特必林)'
+    name_correct: true
+    same_count: 1
+  pill_5:
+    dose_correct: true
+    license: 衛署藥製字第042948號
+    name: '"健亞"  健得靜錠０．２５毫克（三氮二氮平）'
+    name_correct: true
+    same_count: 3
+  pill_6:
+    dose_correct: true
+    license: 衛部藥輸字第027281號
+    name: 朗斯弗膜衣錠15毫克
+    name_correct: true
+    same_count: 1
+timestamp: '2026-04-19 21:40:01'
+total_correct: true
+total_count: 6
+tray_id: '000002'
+variety_correct: true
+variety_count: 4

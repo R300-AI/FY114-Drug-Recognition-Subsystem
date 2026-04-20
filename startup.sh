@@ -1,19 +1,18 @@
 #!/bin/bash
-# FY114 藥物辨識子系統 — 開機自動啟動腳本
-# 設定方式：chmod +x startup.sh && crontab -e 加入：
-#   @reboot /home/admin/Desktop/FY114-Drug-Recognition-Subsystem/startup.sh
+# Drug-Recognition-Subsystem — 開機自動啟動腳本
 #
-# 若 FY115 Docker 主機 IP 不是 192.168.50.1，請修改 --segment-url 與 --encoder-url。
+# 設定方式：
+#   chmod +x startup.sh
+#   crontab -e
+#   加入：@reboot /完整路徑/Drug-Recognition-Subsystem/startup.sh
 
-LOG="/tmp/fy114_startup.log"
-
+LOG="/tmp/drug_recognition_startup.log"
 echo "$(date): Startup script started" >> "$LOG"
 
 # 等待顯示環境就緒
 sleep 5
 
 # 旋轉螢幕（依實際螢幕輸出名稱調整）
-echo "$(date): Rotating screen" >> "$LOG"
 DISPLAY=:0 xrandr --output XWAYLAND0 --rotate right 2>> "$LOG" || true
 
 # 進入專案資料夾
@@ -24,6 +23,8 @@ cd "$PROJECT_DIR"
 # 啟動虛擬環境
 source .venv/bin/activate
 
-# 啟動 GUI（API 位址讀自 api.yaml，不需要其他對外服務）
-echo "$(date): Starting run.py..." >> "$LOG"
+# 啟動 GUI（前景執行，此行結束 = 使用者關閉視窗）
+# 連線設定請修改 api.yaml
+echo "$(date): Starting run.py" >> "$LOG"
 python run.py --fullscreen 2>&1 | tee -a "$LOG"
+

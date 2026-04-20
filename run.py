@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""run.py — FY114 藥物辨識子系統 UI 程序
+"""run.py — FY115 藥物辨識子系統 UI 程序
 
 負責：Tkinter GUI、相機拍攝、抽屜感測、驗證填報、紀錄儲存。
 AI 推論直接呼叫 AI Search Platform 的 Segment API 與 Encoder API。
+連線設定請修改同目錄的 api.yaml。
 """
 
 import argparse
@@ -24,11 +25,13 @@ def main():
     _encoder_url = _cfg.get("encoder_url", "http://192.168.50.1:8002")
     _timeout     = _cfg.get("timeout", 30)
 
-    parser = argparse.ArgumentParser(description="FY114 藥物辨識子系統 UI")
+    parser = argparse.ArgumentParser(description="FY115 藥物辨識子系統 UI")
     parser.add_argument("--fullscreen", action="store_true",
                         help="全螢幕模式（觸控螢幕）")
     parser.add_argument("--debug", action="store_true",
-                        help="除錯模式：跳過相機、感測器與 API，以樣本圖作為測試輸入")
+                        help="除錯模式：跳過相機、感測器與 API，以樣本圖作為測試輸入，並產生假辨識結果")
+    parser.add_argument("--demo", action="store_true",
+                        help="展示模式：跳過不可用的硬體，但仍呼叫真實 API 推論（硬體不完整時亦可自動發動）")
     parser.add_argument("--default-correct", dest="default_correct",
                         action="store_true", default=True,
                         help="預設辨識結果為正確（預設：啟用）")
@@ -42,6 +45,8 @@ def main():
 
     if args.debug:
         print("[init] Debug mode ON: camera, LED and API will be skipped")
+    elif args.demo:
+        print("[init] Demo mode ON: hardware fallback enabled, API inference active")
     else:
         print(f"[init] Segment URL : {_segment_url}")
         print(f"[init] Encoder URL : {_encoder_url}")
@@ -57,6 +62,7 @@ def main():
         timeout=_timeout,
         fullscreen=args.fullscreen,
         debug=args.debug,
+        demo=args.demo,
         default_verification=True if args.default_correct else None,
         enable_excel_export=args.excel_export)
     root.mainloop()

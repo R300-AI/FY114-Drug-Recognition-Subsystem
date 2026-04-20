@@ -1,7 +1,5 @@
 # Raspberry Pi 5 (Debian 12) 執行環境
 # 安裝方式：pip install -r requirements.txt
-#
-# AI 推論由遠端 FY115 平台 Docker 服務處理，本機不需要 PyTorch / YOLO。
 
 # 影像處理
 numpy>=1.24.0,<2.0.0
@@ -9,13 +7,13 @@ opencv-python>=4.8.0
 pillow>=10.0.0
 
 # GUI 與圖表（Drawer Monitor 所需）
-matplotlib>=3.7.0
+matplotlib>=3.7.0  # Drawer Monitor 時間序列圖表
 
-# HTTP 客戶端（直接呼叫 Segment API / Encoder API）
+# 遠端 API 呼叫（FY115 Segment / Encoder 服務）
 requests>=2.31.0
 
-# 設定檔讀寫
-pyyaml>=6.0
+# 設定檔
+pyyaml>=6.0.0
 
 # Excel 讀寫（問卷自動填寫）
 openpyxl>=3.1.0
