@@ -7,7 +7,7 @@
 #   加入：@reboot /完整路徑/Drug-Recognition-Subsystem/startup.sh
 export DISPLAY=:0
 export XAUTHORITY=/home/admin/.Xauthority
-
+ifconfig eth0 192.168.50.2/24
 
 LOG="/tmp/drug_recognition_startup.log"
 echo "$(date): Startup script started" >> "$LOG"
