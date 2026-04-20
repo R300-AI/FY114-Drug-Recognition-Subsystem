@@ -165,5 +165,5 @@ def check_reachable(
     Raises:
         requests.RequestException: 任一 API 無法連線時。
     """
-    requests.get(f"{segment_url.rstrip('/')}/healthz", timeout=timeout).raise_for_status()
-    requests.get(f"{encoder_url.rstrip('/')}/healthz", timeout=timeout).raise_for_status()
+    requests.get(f"{segment_url.rstrip('/')}/readyz", timeout=timeout).raise_for_status()
+    requests.get(f"{encoder_url.rstrip('/')}/readyz", timeout=timeout).raise_for_status()

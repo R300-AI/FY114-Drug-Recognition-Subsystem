@@ -139,15 +139,15 @@ timeout: 30                            # 連線逾時秒數（視網路狀況調
 
 用 dhcpcd.conf 永久設定 eth0 靜態 IP：
 ```yaml
-sudo nano /etc/dhcpcd.conf
-```
-```yaml
-interface eth0
-static ip_address=192.168.50.x/24
-nolink
-```
-```yaml
-sudo systemctl restart dhcpcd
+# 設定 eth0 靜態 IP
+sudo nmcli con add type ethernet ifname eth0 con-name eth0-static \
+    ip4 192.168.50.2/24 ipv4.method manual
+
+# 套用
+sudo nmcli con up eth0-static
+
+# 確認
+ip addr show eth0
 ```
 
 ---
