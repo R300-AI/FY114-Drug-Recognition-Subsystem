@@ -33,9 +33,10 @@ try:
     import board
     import neopixel
     HAS_LED = True
-except ImportError:
+except (ImportError, NotImplementedError):
     HAS_LED = False
 
+from . import analyser
 from .types import Detection, MatchResult
 from .excel_writer import ExcelWriter, create_backup, HAS_OPENPYXL
 
@@ -178,14 +179,18 @@ class App:
     def __init__(
         self,
         root: tk.Tk,
-        api_url: str = "http://localhost:5000",
+        segment_url: str = "http://192.168.50.1:8001",
+        encoder_url: str = "http://192.168.50.1:8002",
+        timeout: int = 30,
         fullscreen: bool = False,
         debug: bool = False,
         default_verification: bool | None = True,
         enable_excel_export: bool = True,
     ):
         self.root    = root
-        self._api_url = api_url.rstrip("/")
+        self._segment_url = segment_url.rstrip("/")
+        self._encoder_url = encoder_url.rstrip("/")
+        self._timeout = timeout
         self._debug  = debug
         self._default_verification = default_verification  # 預設驗證狀態（True=正確, False=錯誤, None=未選）
         self._enable_excel_export = enable_excel_export and HAS_OPENPYXL  # Excel 匯出功能
@@ -975,12 +980,8 @@ class App:
         return detections
 
     def _call_api(self, frame: np.ndarray) -> tuple[list[Detection], list[MatchResult | None]]:
-        """將影像 POST 至推論 API，回傳重建後的 Detection 與 MatchResult 列表。"""
-        _, img_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        files = {"image": ("image.jpg", img_buf.tobytes(), "image/jpeg")}
-        resp = requests.post(f"{self._api_url}/analyse", files=files, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
+        """直接呼叫 AI 平台 Segment/Encoder API，回傳重建後的 Detection 與 MatchResult 列表。"""
+        data = analyser.analyse(frame, self._segment_url, self._encoder_url, self._timeout)
 
         detections: list[Detection] = []
         results:    list[MatchResult | None] = []
@@ -1064,11 +1065,16 @@ class App:
                 results    = self._debug_fake_results(len(detections))
             else:
                 detections, results = self._call_api(frame)
-        except requests.exceptions.ConnectionError:
-            print("[analyse] API connection failed")
+        except requests.exceptions.RequestException as _conn_err:
+            print(f"[analyse] API connection failed: {_conn_err}")
             self._update_badge()
             self._show_info_modal(
-                "連線錯誤", f"無法連線至推論伺服器 {self._api_url}\n請確認 api.py 已啟動。")
+                "連線錯誤",
+                "無法連線至 AI 辨識服務。\n\n"
+                "請確認：\n"
+                "• 設備已正常連接網路\n"
+                "• AI Search Platform 主機已開機且服務正在執行\n\n"
+                f"（技術資訊：{self._segment_url} 無回應）")
             return
         except Exception as e:
             print(f"[analyse] Error: {e}")

@@ -1,91 +1,45 @@
 #!/usr/bin/env python3
-"""api.py — FY114 藥物辨識推論伺服器
+"""api.py — FY114 推論橋接伺服器
+
+本服務作為 Raspberry Pi 展示機的推論橋接，將 /analyse 請求轉發至
+FY115 平台的 Segment API 與 Encoder API。
 
 Endpoint:
     POST /analyse     影像辨識（multipart form: image=<file>）
+    GET  /healthz     健康檢查
 
 啟動:
-    python api.py
+    python api.py \\
+        --segment-url http://192.168.50.1:8001 \\
+        --encoder-url http://192.168.50.1:8002
 """
 
-import base64
-import csv
+import argparse
+import io
+import time
 
 import cv2
 import numpy as np
+import requests
 from flask import Flask, jsonify, request
-
-# ── 檢測 DirectML (Ryzen iGPU) ──
-import torch
-
-_device = "cpu"
-try:
-    import torch_directml
-    _device = torch_directml.device()
-    print(f"[api] 🚀 DirectML GPU detected")
-except ImportError:
-    print("[api] torch-directml not installed, using CPU")
-    print("[api] Install: pip install torch-directml")
-except Exception as e:
-    print(f"[api] DirectML unavailable ({e}), using CPU")
-
-from utils.models import YOLODetector, ResNet34Encoder, Top1Matcher
-from utils.gallery import Gallery
-
-# ── 固定路徑 ──
-_MODEL_PATH   = "src/best.pt"
-_GALLERY_PATH = "src/gallery"
-_DRUG_DB_PATH = "DrugTW2025.csv"
 
 app = Flask(__name__)
 
-# ── 啟動時載入（模組層級，gunicorn 每 worker 各載一次）──
-def _load_drug_db() -> dict[str, dict]:
-    db: dict[str, dict] = {}
-    try:
-        with open(_DRUG_DB_PATH, encoding="utf-8-sig", newline="") as f:
-            for row in csv.DictReader(f):
-                lic = row.get("許可證字號", "").strip()
-                if lic:
-                    db[lic] = {
-                        "name_zh":   row.get("中文品名", ""),
-                        "name_en":   row.get("英文品名", ""),
-                        "shape":     row.get("形狀", ""),
-                        "color":     row.get("顏色", ""),
-                        "size":      row.get("外觀尺寸", ""),
-                        "mark1":     row.get("標註一", ""),
-                        "mark2":     row.get("標註二", ""),
-                        "image_url": row.get("外觀圖檔連結", ""),
-                    }
-        print(f"[api] DrugTW2025: {len(db)} entries")
-    except Exception as e:
-        print(f"[api] Warning: DrugTW2025 load failed: {e}")
-    return db
-
-_drug_db = _load_drug_db()
-
-_gallery = Gallery(_GALLERY_PATH)
-_gallery.load()
-print(f"[api] Gallery: {_gallery.size} entries")
-
-_detector = YOLODetector(_MODEL_PATH, device=_device)
-_encoder  = ResNet34Encoder()
-_matcher  = Top1Matcher(_gallery)
-print("[api] Ready")
+# 由 __main__ 透過 argparse 設定
+_SEGMENT_URL: str = "http://192.168.50.1:8001"
+_ENCODER_URL: str = "http://192.168.50.1:8002"
+_TIMEOUT: int = 30
 
 
-# ── 輔助 ──
-def _mask_to_b64(mask: np.ndarray | None) -> str:
-    if mask is None:
-        return ""
-    _, buf = cv2.imencode(".png", (mask * 255).astype(np.uint8))
-    return base64.b64encode(buf.tobytes()).decode("ascii")
+# ── Endpoints ──
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return jsonify({"status": "ok"})
 
 
-# ── Endpoint ──
 @app.route("/analyse", methods=["POST"])
 def analyse():
-    import time
     t0 = time.time()
 
     if "image" not in request.files:
@@ -100,43 +54,77 @@ def analyse():
 
     print(f"[api] image received  shape={frame.shape}", flush=True)
 
-    print("[api] running YOLO detection...", flush=True)
-    detections = list(_detector(frame))
-    print(f"[api] YOLO done  pills={len(detections)}  "
-          f"({time.time()-t0:.2f}s)", flush=True)
+    # Step 1: Segment
+    print("[api] calling Segment API...", flush=True)
+    try:
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        seg_resp = requests.post(
+            f"{_SEGMENT_URL}/v1/segment/predict",
+            files={"file": ("frame.jpg", io.BytesIO(buf.tobytes()), "image/jpeg")},
+            data={"confidence": "0.25"},
+            timeout=_TIMEOUT,
+        )
+        seg_resp.raise_for_status()
+        seg_data = seg_resp.json()
+    except requests.exceptions.RequestException as e:
+        print(f"[api] Segment API error: {e}", flush=True)
+        return jsonify({"error": f"Segment API unreachable: {e}"}), 503
+
+    raw_dets = seg_data.get("detections", [])
+    print(f"[api] Segment done  pills={len(raw_dets)}  ({time.time()-t0:.2f}s)", flush=True)
 
     pills = []
-    for i, det in enumerate(detections):
-        x1, y1, x2, y2 = det.bbox
+    for i, det in enumerate(raw_dets):
+        x1, y1, x2, y2 = det["bbox"]
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             continue
 
-        print(f"[api]   [{i+1}/{len(detections)}] encoding+matching  "
-              f"conf={det.confidence:.2f}  bbox={det.bbox}", flush=True)
-        result = _matcher(_encoder(crop))
+        print(f"[api]   [{i+1}/{len(raw_dets)}] encoding  bbox={det['bbox']}", flush=True)
 
-        # ── DEBUG: 輪流選擇 00008 和 00009 測試多類別功能 ──
-        _debug_drug_list = [
-            "衛署罕藥製字第000008號",
-            "衛署罕藥製字第000009號",
-        ]
-        lic = _debug_drug_list[i % len(_debug_drug_list)]
-        info  = _drug_db.get(lic, {})
-        name  = info.get("name_zh", "未識別")
-        score = 1.0
-        print(f"[api]   [{i+1}/{len(detections)}] → {lic}  {name}  score={score}  [DEBUG alternate]", flush=True)
+        # Step 2: Encode crop
+        try:
+            _, cbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            enc_resp = requests.post(
+                f"{_ENCODER_URL}/v1/encoder/encode",
+                files={"file": ("crop.jpg", io.BytesIO(cbuf.tobytes()), "image/jpeg")},
+                timeout=_TIMEOUT,
+            )
+            enc_resp.raise_for_status()
+            enc_data = enc_resp.json()
+        except requests.exceptions.RequestException as e:
+            print(f"[api]   [{i+1}] Encoder API error: {e}", flush=True)
+            continue
+
+        results = enc_data.get("results", [])
+        if not results:
+            continue
+
+        top1 = results[0]
+        lic   = top1.get("許可證字號", "")
+        name  = top1.get("中文品名", "未識別")
+        score = float(top1.get("score", 0.0))
+        print(f"[api]   [{i+1}/{len(raw_dets)}] → {lic}  {name}  score={score:.4f}", flush=True)
 
         pills.append({
-            "bbox":           list(det.bbox),
-            "mask_b64":       _mask_to_b64(det.mask),
-            "confidence":     round(float(det.confidence), 4),
-            "class_id":       int(det.class_id),
+            "bbox":           det["bbox"],
+            "mask_b64":       "",  # 遮罩未請求（UI 自動忽略）
+            "confidence":     round(float(det["confidence"]), 4),
+            "class_id":       int(det["class_id"]),
             "license_number": lic,
             "name":           name,
             "side":           0,
-            "score":          score,
-            "drug_info":      info,
+            "score":          round(score, 4),
+            "drug_info": {
+                "name_zh":   top1.get("中文品名", ""),
+                "name_en":   top1.get("英文品名", ""),
+                "shape":     top1.get("形狀", ""),
+                "color":     top1.get("顏色", ""),
+                "size":      top1.get("外觀尺寸", ""),
+                "mark1":     top1.get("標註一", ""),
+                "mark2":     top1.get("標註二", ""),
+                "image_url": top1.get("外觀圖檔連結", ""),
+            },
         })
 
     print(f"[api] done  total={time.time()-t0:.2f}s  matched={len(pills)}", flush=True)
@@ -144,4 +132,35 @@ def analyse():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    parser = argparse.ArgumentParser(
+        description="FY114 推論橋接伺服器",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--segment-url", default="http://192.168.50.1:8001",
+        help="Segment API 位址",
+    )
+    parser.add_argument(
+        "--encoder-url", default="http://192.168.50.1:8002",
+        help="Encoder API 位址",
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=30,
+        help="HTTP 請求逾時秒數",
+    )
+    parser.add_argument(
+        "--port", type=int, default=5000,
+        help="本機監聽埠",
+    )
+    args = parser.parse_args()
+
+    _SEGMENT_URL = args.segment_url
+    _ENCODER_URL = args.encoder_url
+    _TIMEOUT = args.timeout
+
+    print(f"[api] Segment URL : {_SEGMENT_URL}", flush=True)
+    print(f"[api] Encoder URL : {_ENCODER_URL}", flush=True)
+    print(f"[api] Timeout     : {_TIMEOUT}s", flush=True)
+    print(f"[api] Listening on port {args.port}", flush=True)
+
+    app.run(host="0.0.0.0", port=args.port)

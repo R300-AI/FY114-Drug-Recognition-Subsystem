@@ -2,6 +2,8 @@
 # FY114 藥物辨識子系統 — 開機自動啟動腳本
 # 設定方式：chmod +x startup.sh && crontab -e 加入：
 #   @reboot /home/admin/Desktop/FY114-Drug-Recognition-Subsystem/startup.sh
+#
+# 若 FY115 Docker 主機 IP 不是 192.168.50.1，請修改 --segment-url 與 --encoder-url。
 
 LOG="/tmp/fy114_startup.log"
 
@@ -19,6 +21,9 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "$(date): Starting app from $PROJECT_DIR" >> "$LOG"
 cd "$PROJECT_DIR"
 
-# 啟動虛擬環境並執行
+# 啟動虛擬環境
 source .venv/bin/activate
+
+# 啟動 GUI（API 位址讀自 api.yaml，不需要其他對外服務）
+echo "$(date): Starting run.py..." >> "$LOG"
 python run.py --fullscreen 2>&1 | tee -a "$LOG"

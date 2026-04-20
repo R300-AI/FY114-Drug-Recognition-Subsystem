@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """
-Hardware / Module Test Runner for Drug Dispense Verify Subsystem
+Hardware / API Test Runner for FY114 Drug Recognition Subsystem
 
 Usage:
-    python test.py --picam --light --drawer --detector --encoder --matcher
+    python test.py --picam --light --drawer --api
 
 Options:
-    --picam      Test Raspberry Pi Camera Module (Picamera2)
-    --light      Test WS2812 LED Ring Light
-    --drawer     Test MN96100C 2.5D Sensor + Depth Analysis
-    --detector   Test BaseDetector: area filtering + detect_and_crop (no model)
-    --encoder    Test BaseEncoder: forward, L2 normalization, encode_batch (no model)
-    --matcher    Test BaseMatcher: empty-gallery guard + forward dispatch (no model)
+    --picam   Test Raspberry Pi Camera Module (Picamera2)
+    --light   Test WS2812 LED Ring Light
+    --drawer  Test MN96100C 2.5D Sensor + Depth Analysis
+    --api     Test AI pipeline (API config read from api.yaml)
 """
 
 import sys
 import argparse
+from pathlib import Path
+
+try:
+    import yaml
+    _cfg_path = Path(__file__).parent / "api.yaml"
+    _cfg = yaml.safe_load(_cfg_path.read_text(encoding="utf-8")) if _cfg_path.exists() else {}
+except ImportError:
+    _cfg = {}
 
 import numpy as np
 
@@ -177,172 +183,47 @@ def test_drawer() -> bool:
         return False
 
 
+
 # ============================================================
-# Module Tests (no real model required)
+# API Test
 # ============================================================
 
-def test_detector() -> bool:
-    """Test BaseDetector: area filtering + detect_and_crop (inline subclass, no model)"""
-    from utils.detector import BaseDetector
-    from utils.types import Detection
+def test_api(segment_url: str, encoder_url: str) -> bool:
+    """Test the full AI pipeline directly against Segment and Encoder APIs."""
+    import cv2
+    import numpy as np
+    import requests
+    from utils.analyser import analyse, check_reachable
 
-    class _DummyDetector(BaseDetector):
-        min_area = 500
-
-        def __init__(self):
-            pass  # no model
-
-        def forward(self, image: np.ndarray) -> list[Detection]:
-            h, w = image.shape[:2]
-            mask = np.zeros((h, w), dtype=np.uint8)
-            return [
-                Detection(bbox=(0,  0,  10, 10), mask=mask, confidence=0.9),  # area=100  → filtered
-                Detection(bbox=(0,  0,  30, 20), mask=mask, confidence=0.8),  # area=600  → kept
-                Detection(bbox=(50, 50, 80, 90), mask=mask, confidence=0.7),  # area=1200 → kept
-            ]
-
-    log("  ↳ Creating _DummyDetector (inline, no model)...")
-    det = _DummyDetector()
-    dummy = np.zeros((200, 200, 3), dtype=np.uint8)
-
-    results = det(dummy)  # __call__ applies min_area filter
-    log(f"  ↳ forward() returned 3 detections; after min_area={det.min_area} filter: {len(results)}")
-    if len(results) != 2:
-        log(f"  ↳ Expected 2, got {len(results)}")
+    log(f"  ↳ Checking Segment API at {segment_url}/healthz...")
+    log(f"  ↳ Checking Encoder API at {encoder_url}/healthz...")
+    try:
+        check_reachable(segment_url, encoder_url, timeout=5)
+        log(f"  ↳ Segment API is up ✓")
+        log(f"  ↳ Encoder API is up ✓")
+    except requests.exceptions.RequestException as e:
+        log(f"  ↳ API not reachable: {e}")
         return False
 
-    crops = det.detect_and_crop(dummy)
-    log(f"  ↳ detect_and_crop() returned {len(crops)} crops")
-    if len(crops) != 2:
-        log(f"  ↳ Expected 2 crops, got {len(crops)}")
-        return False
-    if not all(isinstance(c, np.ndarray) for _, c in crops):
-        log("  ↳ Crops are not ndarray")
-        return False
-
-    log("  ↳ BaseDetector ✓")
-    return True
-
-
-def test_encoder() -> bool:
-    """Test BaseEncoder: forward, L2 normalization, encode_batch (inline subclass, no model)"""
-    from utils.encoder import BaseEncoder
-
-    EXPECTED_DIM = 4
-
-    class _DummyEncoder(BaseEncoder):
-        FEATURE_DIM = EXPECTED_DIM
-
-        def __init__(self):
-            pass  # no model
-
-        def forward(self, image: np.ndarray) -> np.ndarray:
-            # Sum each quadrant → 4-dim vector (simple arithmetic, no ML)
-            h, w = image.shape[:2]
-            hh, hw = h // 2, w // 2
-            return np.array([
-                float(image[:hh, :hw].sum()),
-                float(image[:hh, hw:].sum()),
-                float(image[hh:, :hw].sum()),
-                float(image[hh:, hw:].sum()),
-            ])
-
-    log("  ↳ Creating _DummyEncoder (inline, no model)...")
-    enc = _DummyEncoder()
-    dummy = np.random.randint(1, 255, (8, 8, 3), dtype=np.uint8)
-
-    feat = enc(dummy)  # __call__: forward → float32 → L2 normalize
-    log(f"  ↳ Feature shape: {feat.shape}, dtype: {feat.dtype}")
-    if feat.shape != (EXPECTED_DIM,):
-        log(f"  ↳ Expected shape ({EXPECTED_DIM},), got {feat.shape}")
-        return False
-    if feat.dtype != np.float32:
-        log(f"  ↳ Expected float32, got {feat.dtype}")
+    log("  ↳ Sending test image to Segment → Encoder pipeline...")
+    try:
+        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.rectangle(dummy, (100, 100), (300, 380), (200, 200, 200), -1)
+        data = analyse(dummy, segment_url, encoder_url, timeout=60)
+    except requests.exceptions.RequestException as e:
+        log(f"  ↳ Pipeline request failed: {e}")
         return False
 
-    norm = np.linalg.norm(feat)
-    log(f"  ↳ L2 norm: {norm:.6f} (should be 1.0)")
-    if not np.isclose(norm, 1.0, atol=1e-5):
-        log(f"  ↳ Norm is not 1.0")
+    if data.get("status") != "ok":
+        log(f"  ↳ Unexpected response: {data}")
         return False
 
-    images = [np.random.randint(1, 255, (8, 8, 3), dtype=np.uint8) for _ in range(3)]
-    batch = enc.encode_batch(images)
-    log(f"  ↳ encode_batch shape: {batch.shape}")
-    if batch.shape != (3, EXPECTED_DIM):
-        log(f"  ↳ Expected (3, {EXPECTED_DIM}), got {batch.shape}")
-        return False
+    pills = data.get("pills", [])
+    log(f"  ↳ Pipeline response: status=ok  pills={len(pills)} ✓")
+    for i, p in enumerate(pills):
+        log(f"  ↳   [{i+1}] {p.get('name', '?')}  score={p.get('score', 0):.4f}  lic={p.get('license_number', '?')}")
 
-    log("  ↳ BaseEncoder ✓")
-    return True
-
-
-def test_matcher() -> bool:
-    """Test BaseMatcher: empty-gallery guard + forward dispatch (inline subclass, no model)"""
-    from utils.matcher import BaseMatcher
-    from utils.gallery import Gallery
-    from utils.types import MatchResult
-
-    call_log: list[str] = []
-
-    class _DummyMatcher(BaseMatcher):
-        def forward(self, feature: np.ndarray) -> MatchResult | None:
-            call_log.append("forward")
-            scores = np.dot(self.gallery.features, feature)
-            best = int(np.argmax(scores))
-            meta = self.gallery.get_metadata(best)
-            return MatchResult(
-                license_number=meta.get("license_number", ""),
-                name=meta.get("name", ""),
-                side=meta.get("side", 0),
-                score=float(scores[best]),
-            )
-
-    # Test 1: empty gallery → __call__ must return None without entering forward
-    log("  ↳ Test 1: empty gallery guard...")
-    empty_gallery = Gallery("nonexistent_path")
-    matcher = _DummyMatcher(empty_gallery)
-    dummy_feat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-
-    result = matcher(dummy_feat)
-    if result is not None:
-        log(f"  ↳ Expected None, got {result}")
-        return False
-    if call_log:
-        log("  ↳ forward() must NOT be called on empty gallery")
-        return False
-    log("  ↳ Empty-gallery guard OK ✓")
-
-    # Test 2: in-memory gallery → forward dispatched, correct best match returned
-    log("  ↳ Test 2: forward dispatch with in-memory gallery...")
-    gallery = Gallery.__new__(Gallery)
-    gallery.path = None
-    gallery._features = np.array([
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-    ], dtype=np.float32)
-    gallery._index = {"entries": [
-        {"license_number": "TEST-001", "name": "Drug A", "side": 0},
-        {"license_number": "TEST-002", "name": "Drug B", "side": 1},
-    ]}
-
-    matcher2 = _DummyMatcher(gallery)
-    query = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-    result2 = matcher2(query)
-
-    log(f"  ↳ Match result: {result2}")
-    if result2 is None:
-        log("  ↳ Expected a MatchResult, got None")
-        return False
-    if result2.license_number != "TEST-001":
-        log(f"  ↳ Expected TEST-001, got {result2.license_number}")
-        return False
-    if "forward" not in call_log:
-        log("  ↳ forward() was not called")
-        return False
-    log("  ↳ Forward dispatch OK ✓")
-
-    log("  ↳ BaseMatcher ✓")
+    log("  ↳ API pipeline test passed ✓")
     return True
 
 
@@ -351,27 +232,27 @@ def test_matcher() -> bool:
 # ============================================================
 
 def main():
+    _segment_url = _cfg.get('segment_url', 'http://192.168.50.1:8001')
+    _encoder_url = _cfg.get('encoder_url', 'http://192.168.50.1:8002')
+
     parser = argparse.ArgumentParser(
-        description='Test hardware and module components of the Drug Dispense Verify Subsystem',
+        description='Test hardware and AI API pipeline of the FY114 Drug Recognition Subsystem',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python test.py --picam --light --drawer --detector --encoder --matcher  # All tests
-  python test.py --detector --encoder --matcher                           # Module tests only (no hardware)
-  python test.py --picam --drawer                                         # Hardware tests only
-  python test.py --drawer                                                 # 2.5D sensor only
+  python test.py --picam --light --drawer --api   # All tests
+  python test.py --picam --drawer                 # Hardware only
+  python test.py --api                            # API pipeline only
         """
     )
-    parser.add_argument('--picam',    action='store_true', help='Test Raspberry Pi Camera Module')
-    parser.add_argument('--light',    action='store_true', help='Test WS2812 LED Ring Light')
-    parser.add_argument('--drawer',   action='store_true', help='Test MN96100C 2.5D Sensor + Depth Analysis')
-    parser.add_argument('--detector', action='store_true', help='Test BaseDetector (area filtering, no model)')
-    parser.add_argument('--encoder',  action='store_true', help='Test BaseEncoder (L2 norm, no model)')
-    parser.add_argument('--matcher',  action='store_true', help='Test BaseMatcher (guard + dispatch, no model)')
+    parser.add_argument('--picam',   action='store_true', help='Test Raspberry Pi Camera Module')
+    parser.add_argument('--light',   action='store_true', help='Test WS2812 LED Ring Light')
+    parser.add_argument('--drawer',  action='store_true', help='Test MN96100C 2.5D Sensor + Depth Analysis')
+    parser.add_argument('--api',     action='store_true', help='Test AI pipeline (config from api.yaml)')
 
     args = parser.parse_args()
 
-    if not any(vars(args).values()):
+    if not any([args.picam, args.light, args.drawer, args.api]):
         parser.print_help()
         print(f"\n{Colors.RED}Error: Please specify at least one test option.{Colors.RESET}\n")
         sys.exit(1)
@@ -386,12 +267,11 @@ Examples:
         results['LED Ring'] = run_test('WS2812 LED Ring Light', test_light)
     if args.drawer:
         results['2.5D Sensor'] = run_test('MN96100C 2.5D Sensor + Depth Analysis', test_drawer)
-    if args.detector:
-        results['Detector'] = run_test('BaseDetector', test_detector)
-    if args.encoder:
-        results['Encoder'] = run_test('BaseEncoder', test_encoder)
-    if args.matcher:
-        results['Matcher'] = run_test('BaseMatcher', test_matcher)
+    if args.api:
+        results['AI API Pipeline'] = run_test(
+            'AI API Pipeline (Segment + Encoder)',
+            lambda: test_api(_segment_url, _encoder_url),
+        )
 
     print(f"\n{Colors.BLUE}{Colors.BOLD}{'='*60}{Colors.RESET}")
     print(f"{Colors.BLUE}{Colors.BOLD} Test Summary{Colors.RESET}")
