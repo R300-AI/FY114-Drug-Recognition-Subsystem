@@ -125,7 +125,7 @@ sudo usermod -aG gpio,video $USER
 pip install adafruit-blinka Adafruit-Blinka-Raspberry-Pi5-Neopixel adafruit-circuitpython-neopixel
 ```
 
-## 設定
+## 設定網路
 
 向 SI 確認 AI Search Platform 的主機 IP 後，修改專案根目錄的 `api.yaml`：
 
@@ -136,6 +136,19 @@ timeout: 30                            # 連線逾時秒數（視網路狀況調
 ```
 
 預設值為 `192.168.50.1`（展示機透過有線直連主機的預設 IP）。`run.py` 與 `test.py` 啟動時會自動讀取此檔。
+
+用 dhcpcd.conf 永久設定 eth0 靜態 IP：
+```yaml
+sudo nano /etc/dhcpcd.conf
+```
+```yaml
+interface eth0
+static ip_address=192.168.50.x/24
+nolink
+```
+```yaml
+sudo systemctl restart dhcpcd
+```
 
 ---
 
