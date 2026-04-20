@@ -177,7 +177,7 @@ def test_drawer() -> bool:
 # Remote API Test
 # ============================================================
 
-def test_api(segment_url: str, encoder_url: str) -> bool:
+def test_api(segment_url: str, encoder_url: str, timeout: int = 30) -> bool:
     """Test remote FY115 Segment API and Encoder API connectivity."""
     import cv2
     import requests
@@ -185,25 +185,24 @@ def test_api(segment_url: str, encoder_url: str) -> bool:
 
     seg_url = segment_url.rstrip("/")
     enc_url = encoder_url.rstrip("/")
-    timeout = 10
 
     log(f"  ↳ Segment API: {seg_url}")
     log(f"  ↳ Encoder API: {enc_url}")
 
-    # Step 1: healthz
-    log("  ↳ GET /healthz (Segment)...")
-    r = requests.get(f"{seg_url}/healthz", timeout=timeout)
-    if r.status_code != 200 or r.json().get("status") != "ok":
-        log(f"  ↳ Segment healthz failed: {r.status_code} {r.text}")
+    # Step 1: readyz
+    log("  ↳ GET /readyz (Segment)...")
+    r = requests.get(f"{seg_url}/readyz", timeout=timeout)
+    if r.status_code != 200:
+        log(f"  ↳ Segment readyz failed: {r.status_code} {r.text}")
         return False
-    log("  ↳ Segment /healthz OK ✓")
+    log("  ↳ Segment /readyz OK ✓")
 
-    log("  ↳ GET /healthz (Encoder)...")
-    r = requests.get(f"{enc_url}/healthz", timeout=timeout)
-    if r.status_code != 200 or r.json().get("status") != "ok":
-        log(f"  ↳ Encoder healthz failed: {r.status_code} {r.text}")
+    log("  ↳ GET /readyz (Encoder)...")
+    r = requests.get(f"{enc_url}/readyz", timeout=timeout)
+    if r.status_code != 200:
+        log(f"  ↳ Encoder readyz failed: {r.status_code} {r.text}")
         return False
-    log("  ↳ Encoder /healthz OK ✓")
+    log("  ↳ Encoder /readyz OK ✓")
 
     # Step 2: 用 sample 圖測試 Segment API
     sample_path = Path("src/sample/sample.jpg")
@@ -286,6 +285,8 @@ Examples:
                         help='Segment API 位址（預設讀自 api.yaml）')
     parser.add_argument('--encoder-url', default=_cfg.get('encoder_url', 'http://192.168.50.1:8002'),
                         help='Encoder API 位址（預設讀自 api.yaml）')
+    parser.add_argument('--timeout', type=int, default=_cfg.get('timeout', 30),
+                        help='HTTP 逾時秒數（預設讀自 api.yaml）')
 
     args = parser.parse_args()
 
@@ -306,7 +307,7 @@ Examples:
         results['2.5D Sensor'] = run_test('MN96100C 2.5D Sensor + Depth Analysis', test_drawer)
     if args.api:
         results['Remote API'] = run_test('FY115 Segment + Encoder API',
-                                         lambda: test_api(args.segment_url, args.encoder_url))
+                                         lambda: test_api(args.segment_url, args.encoder_url, args.timeout))
 
     print(f"\n{Colors.BLUE}{Colors.BOLD}{'='*60}{Colors.RESET}")
     print(f"{Colors.BLUE}{Colors.BOLD} Test Summary{Colors.RESET}")
