@@ -5,6 +5,9 @@
 #   chmod +x startup.sh
 #   crontab -e
 #   加入：@reboot /完整路徑/Drug-Recognition-Subsystem/startup.sh
+export DISPLAY=:0
+export XAUTHORITY=/home/admin/.Xauthority
+
 
 LOG="/tmp/drug_recognition_startup.log"
 echo "$(date): Startup script started" >> "$LOG"
