@@ -120,7 +120,7 @@ def analyse(
 
         top1  = results[0]
         lic   = top1.get("許可證字號", "")
-        name  = top1.get("中文品名", "未識別")
+        name  = top1.get("英文品名", "") or top1.get("中文品名", "未識別")
         score = float(top1.get("score", 0.0))
         print(
             f"[analyser]   [{i+1}/{len(raw_dets)}] → {lic}  {name}  score={score:.4f}",

@@ -1,0 +1,43 @@
+pills:
+  pill_1:
+    dose_correct: true
+    license: DEMO-001
+    name: Demo Drug 1
+    name_correct: true
+    same_count: 1
+  pill_2:
+    dose_correct: true
+    license: DEMO-002
+    name: Demo Drug 2
+    name_correct: true
+    same_count: 1
+  pill_3:
+    dose_correct: true
+    license: DEMO-003
+    name: Demo Drug 3
+    name_correct: true
+    same_count: 1
+  pill_4:
+    dose_correct: true
+    license: DEMO-004
+    name: Demo Drug 4
+    name_correct: true
+    same_count: 1
+  pill_5:
+    dose_correct: true
+    license: DEMO-005
+    name: Demo Drug 5
+    name_correct: true
+    same_count: 1
+  pill_6:
+    dose_correct: true
+    license: DEMO-006
+    name: Demo Drug 6
+    name_correct: true
+    same_count: 1
+timestamp: '2026-04-27 10:14:37'
+total_correct: true
+total_count: 6
+tray_id: '000006'
+variety_correct: true
+variety_count: 6

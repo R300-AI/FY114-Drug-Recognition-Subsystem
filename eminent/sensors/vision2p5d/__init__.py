@@ -75,12 +75,13 @@ class VideoCapture:
 
     Internally manages:
       - Warmup (blocking, called during __init__)
-      - Depth analysis + state detection on every read()
+      - Intensity calculation + MAX smoothing on every read()
       - Per-frame logging to logs/drawer_state.log
 
     After each successful read(), access:
-      cap.state      — 完全開啟 / 閉合中 / 完全閉合 / 未知
-      cap.intensity  — MAX-smoothed intensity value
+      cap.intensity  — MAX-smoothed intensity value (0-255)
+
+    Drawer state detection (DrawerStateDetector) is the caller's responsibility.
     """
 
     def __init__(
@@ -92,12 +93,6 @@ class VideoCapture:
         *,
         vid: int = 0x04F3,
         pid: int = 0x0C7E,
-        # Depth analysis params
-        threshold_open: float = 80.0,
-        threshold_closed: float = 150.0,
-        min_state_duration: int = 5,
-        min_open_duration: int = 3,
-        min_close_duration: int = 5,
         roi: Optional[dict] = None,
         smoothing_window: int = 1,
         enable_smoothing: bool = False,
@@ -112,24 +107,16 @@ class VideoCapture:
         self.width  = MN96100CConfig.TXOutput.WIDTH
         self.height = MN96100CConfig.TXOutput.HEIGHT
 
-        # Depth analysis
-        from utils.depth_analysis import DepthAnalyzer, DrawerStateDetector
-        self._depth_analyzer  = DepthAnalyzer()
-        self._state_detector  = DrawerStateDetector(
-            threshold_open=threshold_open,
-            threshold_closed=threshold_closed,
-            min_state_duration=min_state_duration,
-            min_open_duration=min_open_duration,
-            min_close_duration=min_close_duration,
-        )
-        self._history         = deque(maxlen=history_size)
-        self._roi             = roi or {}
+        # Depth analysis (Infrastructure layer: intensity + smoothing only)
+        from utils.depth_analysis import DepthAnalyzer
+        self._depth_analyzer   = DepthAnalyzer()
+        self._history          = deque(maxlen=history_size)
+        self._roi              = roi or {}
         self._smoothing_window = smoothing_window
         self._enable_smoothing = enable_smoothing
 
-        # Public state (updated on every read)
-        self.state     = "未知"
-        self.intensity = 0.0
+        # Public output (updated on every read)
+        self.intensity = 0.0  # MAX-smoothed intensity value, for caller's DrawerStateDetector
 
         # Warmup: read last session timestamp before resetting log
         self._last_read_time: Optional[float] = self._load_last_timestamp()
@@ -262,7 +249,7 @@ class VideoCapture:
             return False, None
 
     def _process_depth(self, frame: np.ndarray):
-        """Depth analysis → state detection → terminal print + file log."""
+        """Intensity calculation + MAX smoothing → update self.intensity + log."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
 
         if self._roi.get('enabled', False):
@@ -277,21 +264,10 @@ class VideoCapture:
         else:
             smoothed = metrics['mean']
 
-        self.state     = self._state_detector.update(smoothed)
         self.intensity = smoothed
 
-        open_th   = self._state_detector.threshold_open
-        closed_th = self._state_detector.threshold_closed
-
-        print(
-            f"[sensor] state={self.state:<6}  intensity={smoothed:6.1f}"
-            f"  open={open_th}  closed={closed_th}",
-            flush=True,
-        )
-        self._state_logger.info(
-            f"state={self.state}  intensity={smoothed:.1f}"
-            f"  threshold_open={open_th}  threshold_closed={closed_th}"
-        )
+        print(f"[sensor] intensity={smoothed:6.1f}", flush=True)
+        self._state_logger.info(f"intensity={smoothed:.1f}")
 
     def _process_raw_data(self, raw_data: str) -> Tuple[bool, Optional[np.ndarray]]:
         try:

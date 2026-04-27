@@ -455,6 +455,7 @@ class App:
         try:
             import yaml
             from eminent.sensors.vision2p5d import VideoCapture, MN96100CConfig
+            from utils.depth_analysis import DrawerStateDetector
 
             cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
             self._drawer_close_threshold = cfg['analysis'].get('min_state_duration', 5)
@@ -468,11 +469,6 @@ class App:
                                     cfg['camera']['led_current']),
                 exposure_setting=getattr(MN96100CConfig.ExposureSetting,
                                          cfg['camera'].get('exposure_setting', 'DEFAULT')),
-                threshold_open=cfg['thresholds']['open'],
-                threshold_closed=cfg['thresholds']['closed'],
-                min_state_duration=cfg['analysis'].get('min_state_duration', 5),
-                min_open_duration=cfg['analysis'].get('min_open_duration', 3),
-                min_close_duration=cfg['analysis'].get('min_close_duration', 5),
                 roi=cfg.get('roi', {}),
                 smoothing_window=cfg['display']['smoothing_window'],
                 enable_smoothing=cfg['display'].get('enable_smoothing', True),
@@ -480,6 +476,14 @@ class App:
             )
             if not self._drawer_cap.isOpened():
                 raise RuntimeError("MN96100C not opened")
+
+            self._drawer_state_detector = DrawerStateDetector(
+                threshold_open=cfg['thresholds']['open'],
+                threshold_closed=cfg['thresholds']['closed'],
+                min_state_duration=cfg['analysis'].get('min_state_duration', 5),
+                min_open_duration=cfg['analysis'].get('min_open_duration', 3),
+                min_close_duration=cfg['analysis'].get('min_close_duration', 5),
+            )
 
             self._start_drawer_monitoring()
             print("[drawer] MN96100C ready, monitoring started")
@@ -525,7 +529,7 @@ class App:
                 continue
 
             consecutive_failures = 0
-            state = self._drawer_cap.state
+            state = self._drawer_state_detector.update(self._drawer_cap.intensity)
 
             if self._drawer_sm_state == "WAIT_OPEN":
                 # 等待連續 N 幀「完全開啟」確認抽屜已實際拉出
@@ -585,7 +589,7 @@ class App:
         self._on_drawer_closed()
 
     def _on_drawer_closed(self):
-        """抽屜閉合事件（主執行緒）— 直接呼叫分析，UI 在分析期間暫停回應"""
+        """抽屜閉合事件（主執行緒）"""
         self._on_analyse()
 
     def _capture_single_frame(self) -> np.ndarray | None:
@@ -597,8 +601,9 @@ class App:
                 if img is not None:
                     print(f"[camera] Debug mode: loaded sample image {sample_path}")
                     return img
-            print("[camera] Debug mode: sample not found, returning noise image")
-            return np.random.randint(0, 256, (720, 960, 3), dtype=np.uint8)
+            print("[camera] Warning: src/sample/sample.jpg not found. "
+                  "Place a real tray photo there for meaningful debug results.")
+            return np.full((720, 960, 3), 128, dtype=np.uint8)
         if self._camera is None:
             return None
         try:
@@ -1161,44 +1166,70 @@ class App:
         self.root.update_idletasks()
 
     def _on_analyse(self):
-        """抽屜閉合觸發：拍照 → 呼叫推論 API → 更新 UI（全程主執行緒）"""
+        """抽屜閉合觸發：拍照 → 背景執行緒呼叫 API → 主執行緒更新 UI"""
         if self._is_analysed:
             return   # 正在 REVIEWING 中，忽略重複觸發
 
+        self._lock_ui_for_analysis()
         self._set_status("拍攝中...")
         print("[analyse] Capturing frame...")
         frame = self._capture_single_frame()
         if frame is None:
             print("[analyse] Capture failed")
+            self._unlock_ui()
             self._update_badge()
             self._show_info_modal("提示", "相機拍攝失敗，請確認相機連接狀態。")
             return
 
         self._captured_image = frame.copy()
-
         self._set_status("辨識中...")
         print("[analyse] Running detection...")
-        try:
-            if self._debug:
-                detections = self._load_sample_detections(frame)
-                results    = self._debug_fake_results(len(detections))
-            else:
-                detections, results = self._call_api(frame)
-        except requests.exceptions.ConnectionError:
-            print("[analyse] API connection failed")
-            self._update_badge()
-            self._show_info_modal(
-                "連線錯誤", f"無法連線至推論伺服器 {self._segment_url}\n請確認 AI Search Platform 服務正在執行。")
-            return
-        except Exception as e:
-            print(f"[analyse] Error: {e}")
-            self._update_badge()
-            self._show_info_modal("辨識錯誤", f"推論過程發生錯誤：{e}")
-            return
+
+        def _worker():
+            try:
+                if self._debug:
+                    detections = self._load_sample_detections(frame)
+                    results    = self._debug_fake_results(len(detections))
+                else:
+                    detections, results = self._call_api(frame)
+                self.root.after(0, lambda: self._on_analyse_done(detections, results))
+            except requests.exceptions.ConnectionError:
+                print("[analyse] API connection failed")
+                self.root.after(0, lambda: (
+                    self._unlock_ui(),
+                    self._update_badge(),
+                    self._show_info_modal(
+                        "連線錯誤",
+                        f"無法連線至推論伺服器 {self._segment_url}\n請確認 AI Search Platform 服務正在執行。"),
+                ))
+            except Exception as e:
+                print(f"[analyse] Error: {e}")
+                self.root.after(0, lambda err=e: (
+                    self._unlock_ui(),
+                    self._update_badge(),
+                    self._show_info_modal("辨識錯誤", f"推論過程發生錯誤：{err}"),
+                ))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _lock_ui_for_analysis(self):
+        """辨識期間鎖定可操作控件，呈現「請稍候」狀態。"""
+        self.done_btn.config(state=tk.DISABLED, bg="#bbb")
+        self.tab_cam.config(state=tk.DISABLED)
+        self.tab_ai.config(state=tk.DISABLED)
+
+    def _unlock_ui(self):
+        """辨識結束（成功或失敗）後解除控件鎖定。"""
+        self.tab_cam.config(state=tk.NORMAL)
+        self.tab_ai.config(state=tk.NORMAL)
+
+    def _on_analyse_done(self, detections, results):
+        """API 完成後回到主執行緒更新 UI。"""
+        self._unlock_ui()
 
         if not detections:
             print("[analyse] No pills detected")
-            self._ai_image = frame.copy()
+            self._ai_image = self._captured_image.copy()
             self._is_analysed = True
             self._update_state_from_results([], [])
             self._switch_tab("cam")
@@ -1210,7 +1241,8 @@ class App:
         self._update_state_from_results(detections, results)
         self._detections = detections
         self._is_analysed = True
-        self._ai_image = self._generate_ai_overlay(frame, detections, self.state.pills, highlighted_idx=-1)
+        self._ai_image = self._generate_ai_overlay(
+            self._captured_image, detections, self.state.pills, highlighted_idx=-1)
         self.current_tab = "ai"
         self._update_tab_buttons()
         self._refresh_image()
@@ -1594,7 +1626,8 @@ class App:
 
     def _show_review_modal(self):
         """填報總覽 Modal：顯示所有答案，確認送出才寫入磁碟"""
-        MODAL_W, MODAL_H = 500, 560
+        MODAL_W = 500
+        MODAL_H = min(560, self.root.winfo_height())
         modal = tk.Toplevel(self.root)
         modal.title("填報總覽")
         modal.resizable(False, False)
@@ -1628,10 +1661,10 @@ class App:
 
         def _on_mousewheel(e):
             canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)
 
         def modal_destroy():
-            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind("<MouseWheel>")
             modal.destroy()
 
         def answer_style(value: bool | None) -> tuple[str, str]:
@@ -1793,8 +1826,7 @@ class App:
         self.root.update_idletasks()
         rx = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
         if align_top:
-            # 對齊主視窗上界，保留 10 像素間距
-            ry = self.root.winfo_y() + 10
+            ry = self.root.winfo_y()   # 貼齊主視窗（螢幕）頂部
         else:
             # 垂直置中（原行為）
             ry = self.root.winfo_y() + (self.root.winfo_height() - h) // 2

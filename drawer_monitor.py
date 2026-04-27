@@ -158,7 +158,7 @@ class DrawerMonitorApp:
         status_container = ttk.Frame(control_frame, relief='solid', borderwidth=1)
         status_container.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
         
-        ttk.Label(status_container, text="抽屡狀態：", font=('Arial', 9)
+        ttk.Label(status_container, text="抽屜狀態：", font=('Arial', 9)
                   ).pack(side=tk.LEFT, padx=5, pady=5)
         self.drawer_status_label = ttk.Label(status_container, text="未知",
                                              font=('Arial', 14, 'bold'),
@@ -940,6 +940,8 @@ class DrawerMonitorApp:
             },
             'analysis': {
                 'min_state_duration': 5,
+                'min_open_duration': 3,
+                'min_close_duration': 5,
                 'history_size': 500
             },
             'display': {
