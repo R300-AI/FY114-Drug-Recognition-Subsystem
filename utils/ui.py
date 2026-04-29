@@ -1625,21 +1625,45 @@ class App:
         self._show_review_modal()
 
     def _show_review_modal(self):
-        """填報總覽 Modal：顯示所有答案，確認送出才寫入磁碟"""
-        MODAL_W = 500
-        MODAL_H = min(560, self.root.winfo_height())
-        modal = tk.Toplevel(self.root)
-        modal.title("填報總覽")
-        modal.resizable(False, False)
-        modal.grab_set()
-        modal.transient(self.root)
-        self._center_window(modal, MODAL_W, MODAL_H, align_top=True)
+        """填報總覽 Modal：以 Frame 疊在主視窗上，完全不經過視窗管理員"""
+        self.root.update_idletasks()
+        sw = self.root.winfo_width()
+        sh = self.root.winfo_height()
+        MODAL_W = min(500, sw)
+        MODAL_H = min(560, sh)
 
-        tk.Label(modal, text="填報總覽", font=FONT_TITLE).pack(
+        # ── 診斷 LOG ────────────────────────────────────────────────
+        print("[MODAL_DEBUG] === _show_review_modal ===")
+        print(f"[MODAL_DEBUG]  螢幕解析度     : {self.root.winfo_screenwidth()} x {self.root.winfo_screenheight()}")
+        print(f"[MODAL_DEBUG]  主視窗大小     : {sw} x {sh}  (winfo_width x winfo_height)")
+        print(f"[MODAL_DEBUG]  主視窗位置     : ({self.root.winfo_x()}, {self.root.winfo_y()})  (winfo_x, winfo_y)")
+        print(f"[MODAL_DEBUG]  MODAL 大小     : {MODAL_W} x {MODAL_H}")
+        mx = (sw - MODAL_W) // 2
+        print(f"[MODAL_DEBUG]  MODAL 起點     : x={mx}, y=0  (overlay 內相對座標)")
+        print(f"[MODAL_DEBUG]  overlay.place  : x=0, y=0, w={sw}, h={sh}")
+        print("[MODAL_DEBUG] ===============================")
+        # ────────────────────────────────────────────────────────────
+
+        # 遮罩層：覆蓋整個主視窗，攔截後方所有點擊（模擬 grab_set）
+        overlay = tk.Frame(self.root, bg="#222222")
+        overlay.place(x=0, y=0, width=sw, height=sh)
+        overlay.lift()
+
+        # Modal 主體框：貼頂、水平置中
+        modal_frame = tk.Frame(overlay, bg="white", relief="solid", bd=1)
+        modal_frame.place(x=mx, y=0, width=MODAL_W, height=MODAL_H)
+
+        def modal_destroy():
+            canvas.unbind("<MouseWheel>")
+            canvas.unbind("<Button-4>")
+            canvas.unbind("<Button-5>")
+            overlay.destroy()
+
+        tk.Label(modal_frame, text="填報總覽", font=FONT_TITLE).pack(
             anchor=tk.W, padx=16, pady=(12, 2))
-        tk.Frame(modal, bg="#ccc", height=1).pack(fill=tk.X, padx=16, pady=(0, 2))
+        tk.Frame(modal_frame, bg="#ccc", height=1).pack(fill=tk.X, padx=16, pady=(0, 2))
 
-        scroll_outer = tk.Frame(modal)
+        scroll_outer = tk.Frame(modal_frame)
         scroll_outer.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
 
         canvas = tk.Canvas(scroll_outer, highlightthickness=0)
@@ -1659,13 +1683,11 @@ class App:
             canvas.itemconfig(canvas_win, width=e.width)
         canvas.bind("<Configure>", _on_canvas_configure)
 
-        def _on_mousewheel(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        canvas.bind("<MouseWheel>", _on_mousewheel)
-
-        def modal_destroy():
-            canvas.unbind("<MouseWheel>")
-            modal.destroy()
+        # Windows / macOS 滾輪
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        # Linux / Pi 觸控滾動
+        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
         def answer_style(value: bool | None) -> tuple[str, str]:
             if value is True:
@@ -1726,7 +1748,7 @@ class App:
                      padx=8, pady=2).pack(fill=tk.X)
 
         all_filled = self._find_first_missing() is None
-        btn_frame = tk.Frame(modal, bg=COLOR_BG)
+        btn_frame = tk.Frame(modal_frame, bg=COLOR_BG)
         btn_frame.pack(fill=tk.X, padx=16, pady=(4, 12))
 
         def do_reset():
@@ -1816,20 +1838,21 @@ class App:
 
     def _center_window(self, win: tk.Toplevel, w: int, h: int, align_top: bool = False):
         """定位視窗
-        
+
         Args:
             win: 要定位的視窗
             w: 視窗寬度
             h: 視窗高度
-            align_top: True=對齊主視窗上界，False=置中（預設）
+            align_top: True=對齊螢幕頂部，False=螢幕垂直置中（預設）
         """
         self.root.update_idletasks()
-        rx = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        rx = (sw - w) // 2
         if align_top:
-            ry = self.root.winfo_y()   # 貼齊主視窗（螢幕）頂部
+            ry = 0   # 貼齊實體螢幕頂部（fullscreen 安全）
         else:
-            # 垂直置中（原行為）
-            ry = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+            ry = (sh - h) // 2
         win.geometry(f"{w}x{h}+{rx}+{ry}")
 
     # --------------------------------------------------------
