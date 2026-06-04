@@ -37,7 +37,7 @@ cd "$PROJECT_DIR"
 source .venv/bin/activate
 
 # 啟動 GUI（前景執行，此行結束 = 使用者關閉視窗）
-# 連線設定請修改 api.yaml
+# 連線設定請修改 config.yaml
 echo "$(date): Starting run.py" >> "$LOG"
 python run.py --fullscreen 2>&1 | tee -a "$LOG"
 

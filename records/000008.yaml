@@ -1,0 +1,19 @@
+pills:
+  pill_1:
+    dose_correct: true
+    license: 衛署藥製字第056733號
+    name: Harkin Tablets "Y.C."
+    name_correct: true
+    same_count: 1
+  pill_2:
+    dose_correct: true
+    license: 衛署藥輸字第024205號
+    name: SOLIAN 400MG FILM-COATED SCORED TABLET
+    name_correct: true
+    same_count: 1
+timestamp: '2026-06-03 14:58:28'
+total_correct: true
+total_count: 2
+tray_id: 000008
+variety_correct: true
+variety_count: 2

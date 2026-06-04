@@ -1,0 +1,19 @@
+pills:
+  pill_1:
+    dose_correct: true
+    license: 衛署藥輸字第023177號
+    name: CELEBREX CAPSULE 200MG
+    name_correct: true
+    same_count: 2
+  pill_2:
+    dose_correct: true
+    license: 衛署藥輸字第023177號
+    name: CELEBREX CAPSULE 200MG
+    name_correct: true
+    same_count: 2
+timestamp: '2026-06-05 01:59:09'
+total_correct: true
+total_count: 2
+tray_id: '000014'
+variety_correct: true
+variety_count: 1

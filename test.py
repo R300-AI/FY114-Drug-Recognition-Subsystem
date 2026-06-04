@@ -3,10 +3,10 @@
 Hardware / API Test Runner for Drug-Recognition-Subsystem
 
 Usage:
-    python test.py --picam --light --drawer --api
+    python test.py --camera --light --drawer --api
 
 Options:
-    --picam   Test Raspberry Pi Camera Module (Picamera2)
+    --camera  Test USB Camera (OpenCV VideoCapture, Logitech C270)
     --light   Test WS2812 LED Ring Light
     --drawer  Test MN96100C 2.5D Sensor + Depth Analysis
     --api     Test remote FY115 Segment/Encoder API connectivity
@@ -58,21 +58,22 @@ def run_test(test_name: str, test_func) -> bool:
 # Hardware Tests
 # ============================================================
 
-def test_picam() -> bool:
-    """Test Raspberry Pi Camera Module (Picamera2)"""
+def test_camera(device_index: int = 0) -> bool:
+    """Test USB Camera (OpenCV VideoCapture)"""
+    import cv2
     try:
-        from picamera2 import Picamera2
-        log("  ↳ Initializing Picamera2...")
-        picam2 = Picamera2()
-        picam2.start()
+        log(f"  ↳ Opening USB camera (index={device_index})...")
+        cap = cv2.VideoCapture(device_index)
+        if not cap.isOpened():
+            log(f"  ↳ Cannot open camera at index {device_index}")
+            return False
         log("  ↳ Capturing frame...")
-        frame = picam2.capture_array()
-        picam2.stop()
-        picam2.close()
-        if frame is not None and frame.size > 0:
+        ret, frame = cap.read()
+        cap.release()
+        if ret and frame is not None and frame.size > 0:
             log(f"  ↳ Frame captured (shape={frame.shape}) ✓")
             return True
-        log("  ↳ Frame is empty")
+        log("  ↳ Frame capture failed")
         return False
     except Exception as e:
         log(f"  ↳ Error: {e}")
@@ -264,29 +265,31 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python test.py --picam --light --drawer --api   # All tests
-  python test.py --api                            # API connectivity only (no hardware required)
-  python test.py --picam --drawer                 # Hardware tests only
+  python test.py --camera --light --drawer --api   # All tests
+  python test.py --api                             # API connectivity only (no hardware required)
+  python test.py --camera --drawer                 # Hardware tests only
         """
     )
-    parser.add_argument('--picam',  action='store_true', help='Test Raspberry Pi Camera Module')
+    parser.add_argument('--camera', action='store_true', help='Test USB Camera (OpenCV VideoCapture)')
     parser.add_argument('--light',  action='store_true', help='Test WS2812 LED Ring Light')
     parser.add_argument('--drawer', action='store_true', help='Test MN96100C 2.5D Sensor + Depth Analysis')
     parser.add_argument('--api',    action='store_true', help='Test remote FY115 Segment/Encoder API')
 
-    # 預設值從 api.yaml 讀取，讓 test.py 與 run.py 保持一致
+    # 預設值從 config.yaml 讀取，讓 test.py 與 run.py 保持一致
     try:
         import yaml
         from pathlib import Path
-        _cfg = yaml.safe_load(Path(__file__).parent.joinpath('api.yaml').read_text(encoding='utf-8'))
+        _cfg = yaml.safe_load(Path(__file__).parent.joinpath('config.yaml').read_text(encoding='utf-8'))
     except Exception:
         _cfg = {}
-    parser.add_argument('--segment-url', default=_cfg.get('segment_url', 'http://192.168.50.1:8001'),
-                        help='Segment API 位址（預設讀自 api.yaml）')
-    parser.add_argument('--encoder-url', default=_cfg.get('encoder_url', 'http://192.168.50.1:8002'),
-                        help='Encoder API 位址（預設讀自 api.yaml）')
-    parser.add_argument('--timeout', type=int, default=_cfg.get('timeout', 30),
-                        help='HTTP 逾時秒數（預設讀自 api.yaml）')
+    _api_cfg = _cfg.get("api", {})
+    _camera_index = _cfg.get("camera", {}).get("device_index", 0)
+    parser.add_argument('--segment-url', default=_api_cfg.get('segment_url', 'http://192.168.50.1:8001'),
+                        help='Segment API 位址（預設讀自 config.yaml）')
+    parser.add_argument('--encoder-url', default=_api_cfg.get('encoder_url', 'http://192.168.50.1:8002'),
+                        help='Encoder API 位址（預設讀自 config.yaml）')
+    parser.add_argument('--timeout', type=int, default=_api_cfg.get('timeout', 30),
+                        help='HTTP 逾時秒數（預設讀自 config.yaml）')
 
     args = parser.parse_args()
 
@@ -299,8 +302,8 @@ Examples:
 
     results = {}
 
-    if args.picam:
-        results['Pi Camera'] = run_test('Raspberry Pi Camera', test_picam)
+    if args.camera:
+        results['USB Camera'] = run_test('USB Camera (OpenCV VideoCapture)', lambda: test_camera(_camera_index))
     if args.light:
         results['LED Ring'] = run_test('WS2812 LED Ring Light', test_light)
     if args.drawer:

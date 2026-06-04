@@ -186,6 +186,18 @@ class App:
         demo: bool = False,
         default_verification: bool | None = True,
         enable_excel_export: bool = True,
+        camera_index: int = 0,
+        camera_width: int = 1280,
+        camera_height: int = 720,
+        camera_warmup_frames: int = 20,
+        camera_backend: str = "auto",
+        camera_rotation: int = 0,
+        light_gpio_pin: int = 18,
+        light_led_count: int = 24,
+        light_pixel_order: str = "GRB",
+        light_brightness: float = 1.0,
+        light_color_on: tuple = (255, 255, 255),
+        light_color_off: tuple = (0, 0, 0),
     ):
         self.root    = root
         self._segment_url = segment_url.rstrip("/")
@@ -208,10 +220,22 @@ class App:
 
         # --- 相機 ---
         self._camera = None
-        self._is_picamera = False
+        self._camera_index = camera_index
+        self._camera_width = camera_width
+        self._camera_height = camera_height
+        self._camera_warmup_frames = camera_warmup_frames
+        self._camera_backend = camera_backend
+        _ROTATION_CODES = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+        self._camera_rotation = _ROTATION_CODES.get(camera_rotation)
 
         # --- LED ---
         self.led_pixels = None
+        self._light_gpio_pin    = light_gpio_pin
+        self._light_led_count   = light_led_count
+        self._light_pixel_order = light_pixel_order
+        self._light_brightness  = light_brightness
+        self._light_color_on    = light_color_on
+        self._light_color_off   = light_color_off
         self._init_led()
 
         # --- 抽屜感測器 ---
@@ -261,7 +285,7 @@ class App:
                 self._demo = True
                 self._demo_auto = True
                 missing = []
-                if self._camera is None:    missing.append("Pi Camera")
+                if self._camera is None:    missing.append("USB 相機")
                 if self._drawer_cap is None: missing.append("抽屜感測器")
                 if self.led_pixels is None:  missing.append("光箱光源")
                 self._update_splash(f"部分硬體未就緒，切換至展示模式…")
@@ -394,9 +418,20 @@ class App:
                 print("[light] Debug mode: LED skipped")
             return
         try:
-            self.led_pixels = neopixel.NeoPixel(board.D18, 24)
-            self.led_pixels.fill((255, 255, 255))
-            print("[light] WS2812 LED Ring ON")
+            _ORDER_MAP = {
+                "RGB": neopixel.RGB, "GRB": neopixel.GRB,
+                "RGBW": neopixel.RGBW, "GRBW": neopixel.GRBW,
+            }
+            pixel_order = _ORDER_MAP.get(self._light_pixel_order.upper(), neopixel.GRB)
+            pin = getattr(board, f"D{self._light_gpio_pin}")
+            self.led_pixels = neopixel.NeoPixel(
+                pin, self._light_led_count,
+                brightness=self._light_brightness,
+                pixel_order=pixel_order,
+            )
+            self.led_pixels.fill(self._light_color_on)
+            print(f"[light] WS2812 LED Ring ON  gpio=D{self._light_gpio_pin}  "
+                  f"count={self._light_led_count}  order={self._light_pixel_order}")
         except Exception as e:
             print(f"[light] LED init failed: {e}")
             self.led_pixels = None
@@ -408,34 +443,31 @@ class App:
     def _init_camera(self):
         if self._debug:
             self._camera = None
-            self._is_picamera = False
             print("[camera] Debug mode: camera skipped (noise image will be used)")
             return
-        try:
-            from picamera2 import Picamera2
-            cam = Picamera2()
-            config = cam.create_still_configuration(
-                main={"size": (1296, 972), "format": "BGR888"}
-            )
-            cam.configure(config)
-            cam.start()
-            # Discard initial frames so AEC/AWB can converge before first real capture
-            print("[camera] AEC warmup...", flush=True)
-            for _ in range(20):
-                cam.capture_array()
-            print("[camera] Picamera2 ready", flush=True)
-            self._camera = cam
-            self._is_picamera = True
-        except ImportError:
-            cap = cv2.VideoCapture(0)
-            if cap.isOpened():
-                self._camera = cap
-                self._is_picamera = False
-                print("[camera] OpenCV camera ready (not started)")
-            else:
-                cap.release()
-                self._camera = None
-                print("[camera] Warning: no camera available")
+        _BACKENDS = {"dshow": cv2.CAP_DSHOW, "v4l2": cv2.CAP_V4L2}
+        backend_id = _BACKENDS.get(self._camera_backend.lower())
+        backend_label = self._camera_backend
+        print(f"[camera] 開啟 USB 相機 index={self._camera_index}  backend={backend_label}...", flush=True)
+        cap = (cv2.VideoCapture(self._camera_index, backend_id) if backend_id is not None
+               else cv2.VideoCapture(self._camera_index))
+        if not cap.isOpened():
+            cap.release()
+            self._camera = None
+            print(f"[camera] Warning: no USB camera at index {self._camera_index}")
+            return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._camera_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._camera_height)
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"[camera] 解析度：{actual_w}x{actual_h}（要求 {self._camera_width}x{self._camera_height}）", flush=True)
+        print(f"[camera] AEC/AWB warmup ({self._camera_warmup_frames} frames)...", flush=True)
+        for i in range(self._camera_warmup_frames):
+            cap.read()
+            if i == 0:
+                print(f"[camera] 第一幀取得，暖機中...", flush=True)
+        print("[camera] USB Camera ready", flush=True)
+        self._camera = cap
 
     # --------------------------------------------------------
     # 抽屜感測器
@@ -593,7 +625,7 @@ class App:
         self._on_analyse()
 
     def _capture_single_frame(self) -> np.ndarray | None:
-        """拍攝一幀。Picamera2 在 init 時已啟動並持續運行，直接 capture_array()。回傳 BGR (H,W,3) 或 None"""
+        """拍攝一幀。回傳 BGR (H,W,3) 或 None"""
         if self._debug or (self._demo and self._camera is None):
             sample_path = Path("src/sample/sample.jpg")
             if sample_path.exists():
@@ -607,17 +639,12 @@ class App:
         if self._camera is None:
             return None
         try:
-            if self._is_picamera:
-                frame = self._camera.capture_array()
-                if frame is None:
-                    return None
-                # BGR888 → BGR
-                if frame.ndim == 3 and frame.shape[2] == 4:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-                return frame
-            else:
-                ret, frame = self._camera.read()
-                return frame if ret else None
+            ret, frame = self._camera.read()
+            if not ret or frame is None:
+                return None
+            if self._camera_rotation is not None:
+                frame = cv2.rotate(frame, self._camera_rotation)
+            return frame
         except Exception as e:
             print(f"[camera] capture failed: {e}")
             return None
@@ -2017,16 +2044,12 @@ class App:
         self._stop_drawer_monitoring()
         if self.led_pixels:
             try:
-                self.led_pixels.fill((0, 0, 0))
+                self.led_pixels.fill(self._light_color_off)
             except Exception:
                 pass
         if self._camera:
             try:
-                if self._is_picamera:
-                    self._camera.stop()
-                    self._camera.close()
-                else:
-                    self._camera.release()
+                self._camera.release()
             except Exception:
                 pass
         self.root.destroy()

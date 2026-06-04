@@ -25,7 +25,7 @@
 ```
 
 展示機預設透過有線網路與主機直連（展示機：192.168.50.2 / 主機：192.168.50.1）。
-實際部署的 IP 位址由系統整合商規劃，**請向 SI 確認後再填入 `api.yaml`**。
+實際部署的 IP 位址由系統整合商規劃，**請向 SI 確認後再填入 `config.yaml`**。
 
 ---
 
@@ -34,7 +34,7 @@
 | 元件 | 規格 |
 |-----|------|
 | 主板 | Raspberry Pi 5（8 GB 記憶體） |
-| 相機 | Raspberry Pi Camera Module 3 |
+| 相機 | Logitech C270 USB Camera（UVC 相容） |
 | 螢幕 | Raspberry Pi 官方 7 吋觸控螢幕（直立放置） |
 | 抽屜感測器 | MN96100C 2.5D 紅外線深度感測器 |
 | 光箱光源 | WS2812 NeoPixel LED 環形燈（24 顆，接 GPIO18） |
@@ -71,10 +71,10 @@
 ### 步驟 1：安裝系統套件
 
 ```bash
-sudo apt update && sudo apt install -y python3-pip python3-venv libcamera-dev python3-lgpio
+sudo apt update && sudo apt install -y python3-pip python3-venv python3-lgpio
 ```
 
-> `python3-lgpio` 是 LED 環形燈驅動（adafruit-blinka）在 Pi 5 上的底層依賴；`libcamera-dev` 是相機底層函式庫。
+> `python3-lgpio` 是 LED 環形燈驅動（adafruit-blinka）在 Pi 5 上的底層依賴。
 
 ---
 
@@ -84,8 +84,8 @@ sudo apt update && sudo apt install -y python3-pip python3-venv libcamera-dev py
 # 切換到本專案目錄
 cd /path/to/FY114-Drug-Recognition-Subsystem
 
-# 建立虛擬環境（--system-site-packages 讓 venv 繼承系統層的 picamera2，避免底層相機驅動衝突）
-python3 -m venv .venv --system-site-packages
+# 建立虛擬環境
+python3 -m venv .venv
 source .venv/bin/activate
 ```
 
@@ -95,10 +95,9 @@ source .venv/bin/activate
 
 ```bash
 pip install -r requirements.txt
-pip install picamera2
 ```
 
-> `requirements.txt` 包含 numpy、opencv、requests、pyyaml、openpyxl 等主要依賴。`picamera2` 因底層驅動需額外獨立安裝。
+> `requirements.txt` 包含 numpy、opencv、requests、pyyaml、openpyxl 等所有主要依賴。USB 相機（Logitech C270）為 UVC 裝置，由 opencv-python 直接驅動，無需額外安裝相機驅動。
 
 ---
 
@@ -127,7 +126,7 @@ pip install adafruit-blinka Adafruit-Blinka-Raspberry-Pi5-Neopixel adafruit-circ
 
 ## 設定網路
 
-向 SI 確認 AI Search Platform 的主機 IP 後，修改專案根目錄的 `api.yaml`：
+向 SI 確認 AI Search Platform 的主機 IP 後，修改專案根目錄的 `config.yaml`：
 
 ```yaml
 segment_url: "http://<主機IP>:8001"   # 影像切割服務
@@ -198,14 +197,14 @@ crontab -e
 
 ```bash
 source .venv/bin/activate
-python test.py --picam --light --drawer --api
+python test.py --camera --light --drawer --api
 ```
 
 | 選項 | 說明 | 需要硬體 |
 |---|---|---|
-| `--picam` | 測試相機是否正常拍攝 | ✅ |
+| `--camera` | 測試 USB 相機是否正常拍攝（讀取 config.yaml 的 device_index） | ✅ |
 | `--light` | 測試 LED 環形燈是否亮起 | ✅ |
 | `--drawer` | 測試抽屜感測器是否正確偵測開關 | ✅ |
-| `--api` | 測試與 AI 辨識服務的完整連線流程（位址讀自 `api.yaml`） | 需網路連至 AI Search Platform |
+| `--api` | 測試與 AI 辨識服務的完整連線流程（位址讀自 `config.yaml`） | 需網路連至 AI Search Platform |
 
 > 可單獨指定選項，例如只測試網路連線：`python test.py --api`

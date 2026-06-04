@@ -18,9 +18,6 @@ pyyaml>=6.0.0
 # Excel 讀寫（問卷自動填寫）
 openpyxl>=3.1.0
 
-# Pi Camera（須以 --system-site-packages 建立 venv）
-# pip install picamera2
-
 # LED Ring（Raspberry Pi 5）
 # pip install adafruit-blinka
 # pip install Adafruit-Blinka-Raspberry-Pi5-Neopixel

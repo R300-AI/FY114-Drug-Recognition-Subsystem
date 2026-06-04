@@ -54,12 +54,12 @@ def analyse(
     encoder_url: str,
     timeout: int = 30,
 ) -> dict:
-    """Segment → Encode 推論管線。
+    """Segment → Match 推論管線。
 
     Args:
         frame:        BGR 影像（H,W,3 uint8）
         segment_url:  Segment API 根位址，例如 http://192.168.50.1:8001
-        encoder_url:  Encoder API 根位址，例如 http://192.168.50.1:8002
+        encoder_url:  Matcher API 根位址，例如 http://192.168.50.1:8002
         timeout:      每次 HTTP 請求的逾時秒數
 
     Returns:
@@ -104,14 +104,14 @@ def analyse(
         try:
             _, cbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
             enc_resp = requests.post(
-                f"{encoder_url.rstrip('/')}/v1/encoder/encode",
+                f"{encoder_url.rstrip('/')}/v1/matcher/search",
                 files={"file": ("crop.jpg", io.BytesIO(cbuf.tobytes()), "image/jpeg")},
                 timeout=timeout,
             )
             enc_resp.raise_for_status()
             enc_data = enc_resp.json()
         except requests.RequestException as e:
-            print(f"[analyser]   [{i+1}] Encoder API error: {e}", flush=True)
+            print(f"[analyser]   [{i+1}] Matcher API error: {e}", flush=True)
             continue
 
         results = enc_data.get("results", [])
@@ -119,8 +119,8 @@ def analyse(
             continue
 
         top1  = results[0]
-        lic   = top1.get("許可證字號", "")
-        name  = top1.get("英文品名", "") or top1.get("中文品名", "未識別")
+        lic   = top1.get("license_no", "")
+        name  = top1.get("name_en", "") or top1.get("name_zh", "未識別")
         score = float(top1.get("score", 0.0))
         print(
             f"[analyser]   [{i+1}/{len(raw_dets)}] → {lic}  {name}  score={score:.4f}",
@@ -137,14 +137,14 @@ def analyse(
             "side":           0,
             "score":          round(score, 4),
             "drug_info": {
-                "name_zh":   top1.get("中文品名", ""),
-                "name_en":   top1.get("英文品名", ""),
-                "shape":     top1.get("形狀", ""),
-                "color":     top1.get("顏色", ""),
-                "size":      top1.get("外觀尺寸", ""),
-                "mark1":     top1.get("標註一", ""),
-                "mark2":     top1.get("標註二", ""),
-                "image_url": top1.get("外觀圖檔連結", ""),
+                "name_zh":   top1.get("name_zh", ""),
+                "name_en":   top1.get("name_en", ""),
+                "shape":     top1.get("shape", ""),
+                "color":     top1.get("color", ""),
+                "size":      top1.get("size_mm", ""),
+                "mark1":     top1.get("mark1", ""),
+                "mark2":     top1.get("mark2", ""),
+                "image_url": top1.get("image_url", ""),
             },
         })
 

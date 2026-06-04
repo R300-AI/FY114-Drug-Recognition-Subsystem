@@ -1,0 +1,33 @@
+# config.yaml — FY114 展示機完整設定檔
+# 所有可調整參數集中於此，run.py 與 test.py 啟動時自動讀取。
+# 請向系統整合商（SI）確認 IP 與硬體規格後填入。
+
+# ── AI Search Platform 連線 ──────────────────────────────────
+api:
+  segment_url: "http://localhost:8001"    # 影像切割服務
+  encoder_url: "http://localhost:8002"    # 特徵比對服務
+  timeout: 30                             # HTTP 請求逾時（秒）
+
+# ── USB 相機（Logitech C270） ────────────────────────────────
+camera:
+  device_index: 0       # /dev/video0 → 0，若有多顆 USB 相機請依序遞增
+  width: 1280           # 擷取解析度（寬），C270 最高支援 1280x720
+  height: 720           # 擷取解析度（高）
+  warmup_frames: 20     # 捨棄前 N 幀以使 AEC/AWB 收斂
+  backend: dshow        # OpenCV 後端：auto / dshow（Windows）/ v4l2（Linux/Pi）
+  rotation: 90          # 順時針旋轉角度：0 / 90 / 180 / 270
+
+# ── LED 環形燈（WS2812 NeoPixel） ────────────────────────────
+light:
+  gpio_pin: 18              # GPIO 腳位（BCM 編號）
+  led_count: 24             # LED 顆數
+  pixel_order: GRB          # 色彩順序：RGB / GRB（多數 WS2812 出廠為 GRB）
+  brightness: 1.0           # 亮度：0.0～1.0
+  color_on:  [255, 255, 255]  # 拍攝時燈光顏色（R, G, B）
+  color_off: [0, 0, 0]        # 關閉時顏色
+
+# ── 色彩校正（影像後處理） ────────────────────────────────────
+color_correction:
+  enabled: false
+  # gamma: 1.0
+  # white_balance: [1.0, 1.0, 1.0]   # R / G / B 增益

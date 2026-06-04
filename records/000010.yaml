@@ -1,0 +1,43 @@
+pills:
+  pill_1:
+    dose_correct: true
+    license: 衛署藥製字第048865號
+    name: Anxowen Tablets
+    name_correct: true
+    same_count: 3
+  pill_2:
+    dose_correct: true
+    license: 衛署藥製字第048865號
+    name: Anxowen Tablets
+    name_correct: true
+    same_count: 3
+  pill_3:
+    dose_correct: true
+    license: 衛署藥製字第048865號
+    name: Anxowen Tablets
+    name_correct: true
+    same_count: 3
+  pill_4:
+    dose_correct: true
+    license: 衛署藥製字第042860號
+    name: GENADINE TABLET 10MG (LORATADINE)
+    name_correct: true
+    same_count: 1
+  pill_5:
+    dose_correct: true
+    license: 衛署藥製字第056733號
+    name: Harkin Tablets "Y.C."
+    name_correct: true
+    same_count: 1
+  pill_6:
+    dose_correct: true
+    license: 衛部藥製字第059628號
+    name: Throatec Spray for Throat
+    name_correct: true
+    same_count: 1
+timestamp: '2026-06-03 15:05:43'
+total_correct: true
+total_count: 6
+tray_id: '000010'
+variety_correct: true
+variety_count: 4
