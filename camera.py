@@ -5,13 +5,15 @@ Disables AWB and sets manual WB temperature. Provides a live diagnostic dashboar
 to find the SW RGB gain combination that yields a neutral gray background.
 
 Keys:
-    SPACE   Capture and save frame to captures/
-    Q       Quit
+    SPACE / 拍照按鈕   Capture and save frame to imgs/
+    Q                  Quit
 """
 from __future__ import annotations
 
 import json
 import sys
+import threading
+import tkinter as tk
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +30,7 @@ TARGET_GRAY   = 128.0
 STABILITY_N   = 30                # frames in rolling-std window
 
 OUTPUT_DIR    = Path("captures")
+IMGS_DIR      = Path("imgs")
 SETTINGS_FILE = Path("camera_settings.json")
 CONFIG_FILE   = Path("config.yaml")
 
@@ -47,6 +50,64 @@ TB_B          = "SW B (0~2x, 50=1x)"
 SW_GAIN_RANGE = (0.0, 2.0)   # 0 → 0.0x, 50 → 1.0x, 100 → 2.0x
 
 _PANEL_H      = 150
+
+
+# ── Capture Button Panel ───────────────────────────────────────────────────────
+class CapturePanel:
+    """獨立 tkinter 視窗，提供拍照按鈕與狀態顯示。"""
+    def __init__(self):
+        self._frame_fn = None
+        self._root = None
+        self._status = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def register(self, fn):
+        """fn() 回傳目前已校正的 BGR frame。"""
+        self._frame_fn = fn
+
+    def _run(self):
+        self._root = tk.Tk()
+        self._root.title("拍照")
+        self._root.geometry("220x100")
+        self._root.resizable(False, False)
+        self._root.attributes("-topmost", True)
+        self._status = tk.StringVar(value="按下按鈕或 SPACE 拍照")
+        tk.Button(
+            self._root, text="📷  拍照存入 imgs/",
+            font=("Sans", 12, "bold"), bg="#d8f1d8",
+            command=self._capture, pady=8,
+        ).pack(fill=tk.X, padx=12, pady=(14, 4))
+        tk.Label(
+            self._root, textvariable=self._status,
+            font=("Sans", 9), fg="#555",
+        ).pack()
+        self._root.mainloop()
+
+    def _capture(self):
+        if self._frame_fn is None:
+            return
+        frame = self._frame_fn()
+        if frame is None:
+            self._status.set("相機尚未就緒")
+            return
+        IMGS_DIR.mkdir(exist_ok=True)
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = IMGS_DIR / f"{ts}.jpg"
+        cv2.imwrite(str(path), frame)
+        self._status.set(f"已存入 {path.name}")
+        print(f"[capture] {path}")
+
+    def set_status(self, msg: str):
+        if self._status:
+            self._status.set(msg)
+
+    def destroy(self):
+        if self._root:
+            try:
+                self._root.quit()
+            except Exception:
+                pass
 
 
 # ── LED ────────────────────────────────────────────────────────────────────────
@@ -310,9 +371,14 @@ def save_to_config(wb: int, sw_gain: tuple) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
     OUTPUT_DIR.mkdir(exist_ok=True)
+    IMGS_DIR.mkdir(exist_ok=True)
     led = init_led()          # 開啟 LED，確保和 run.py 相同光源
     cap = open_camera()
     init_controls()
+
+    panel = CapturePanel()
+    latest: list = [None]     # 最新已校正幀，供按鈕使用
+    panel.register(lambda: latest[0])
 
     cv2.namedWindow(WIN_PREV, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WIN_PREV, FRAME_W, FRAME_H)
@@ -339,6 +405,7 @@ def main() -> None:
 
         sw_gain = ctrl[4]
         frame_corrected = apply_sw_gain(frame, sw_gain)
+        latest[0] = frame_corrected   # 更新按鈕可取用的最新幀
 
         rgb   = cv2.cvtColor(frame_corrected, cv2.COLOR_BGR2RGB)
         stats = frame_stats(rgb)
@@ -356,15 +423,19 @@ def main() -> None:
         if key == ord("q"):
             break
         elif key == ord(" "):
+            IMGS_DIR.mkdir(exist_ok=True)
             ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = OUTPUT_DIR / f"{ts}.jpg"
+            path = IMGS_DIR / f"{ts}.jpg"
             cv2.imwrite(str(path), frame_corrected)
-            print(f"Saved {path}  "
-                  f"R={stats['rgb'][0]:.1f} G={stats['rgb'][1]:.1f} B={stats['rgb'][2]:.1f}  "
-                  f"dev={stats['neutral_dev']:.1f}  \u03c3={float(std_rgb.mean()):.2f}")
+            msg = (f"Saved {path.name}  "
+                   f"R={stats['rgb'][0]:.1f} G={stats['rgb'][1]:.1f} B={stats['rgb'][2]:.1f}  "
+                   f"dev={stats['neutral_dev']:.1f}  \u03c3={float(std_rgb.mean()):.2f}")
+            print(msg)
+            panel.set_status(path.name)
 
     cap.release()
     cv2.destroyAllWindows()
+    panel.destroy()
     if led:
         try:
             led.fill((0, 0, 0))

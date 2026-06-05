@@ -172,19 +172,33 @@ python run.py --fullscreen
 
 ### 開機自動啟動（正式部署）
 
-`startup.sh` 會在開機時自動旋轉螢幕、啟動虛擬環境並執行 `run.py`，啟動過程的 log 記錄於 `/tmp/drug_recognition_startup.log`。
+`startup.sh` 會在桌面登入後自動旋轉螢幕、啟動虛擬環境並執行 `run.py`，啟動過程的 log 記錄於 `/tmp/drug_recognition_startup.log`。
+
+> **注意**：請使用 `~/.config/autostart/` 而非 crontab `@reboot`。crontab 在桌面環境尚未就緒時執行，`DISPLAY` 不存在會導致 GUI 無法啟動。
 
 **設定步驟：**
 
 ```bash
 # 1. 確認 startup.sh 有執行權限
-chmod +x /path/to/FY114-Drug-Recognition-Subsystem/startup.sh
+chmod +x /home/admin/Desktop/FY114-Drug-Recognition-Subsystem/startup.sh
 
-# 2. 開啟 crontab 編輯器
-crontab -e
+# 2. 建立 autostart 目錄（若不存在）
+mkdir -p ~/.config/autostart
 
-# 3. 在檔案最後加入以下這行（將路徑改為實際完整路徑）
-@reboot /完整路徑/FY114-Drug-Recognition-Subsystem/startup.sh
+# 3. 建立 .desktop 啟動設定檔
+cat > ~/.config/autostart/drug-recognition.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Drug Recognition
+Exec=/home/admin/Desktop/FY114-Drug-Recognition-Subsystem/startup.sh
+X-GNOME-Autostart-enabled=true
+EOF
+```
+
+重開機後桌面登入時會自動執行。若沒有啟動，查看 log：
+
+```bash
+cat /tmp/drug_recognition_startup.log
 ```
 
 > **注意**：`startup.sh` 預設螢幕輸出名稱為 `XWAYLAND0`。若旋轉未生效，請先執行 `DISPLAY=:0 xrandr` 查詢實際輸出名稱，再修改 `startup.sh` 中對應的行。
