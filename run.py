@@ -69,6 +69,7 @@ def main():
     camera_width   = _camera_cfg.get("width", 1280)
     camera_height  = _camera_cfg.get("height", 720)
     camera_warmup  = _camera_cfg.get("warmup_frames", 20)
+    camera_capture_warmup = _camera_cfg.get("capture_warmup_frames", 5)
     camera_backend = _camera_cfg.get("backend", "auto")
 
     light_gpio       = _light_cfg.get("gpio_pin", 18)
@@ -108,6 +109,7 @@ def main():
         camera_width=camera_width,
         camera_height=camera_height,
         camera_warmup_frames=camera_warmup,
+        camera_capture_warmup_frames=camera_capture_warmup,
         camera_backend=camera_backend,
         camera_rotation=args.rotation,
         light_gpio_pin=light_gpio,

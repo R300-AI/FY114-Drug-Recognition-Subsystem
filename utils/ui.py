@@ -190,6 +190,7 @@ class App:
         camera_width: int = 1280,
         camera_height: int = 720,
         camera_warmup_frames: int = 20,
+        camera_capture_warmup_frames: int = 5,
         camera_backend: str = "auto",
         camera_rotation: int = 0,
         light_gpio_pin: int = 18,
@@ -224,6 +225,7 @@ class App:
         self._camera_width = camera_width
         self._camera_height = camera_height
         self._camera_warmup_frames = camera_warmup_frames
+        self._camera_capture_warmup_frames = camera_capture_warmup_frames
         self._camera_backend = camera_backend
         _ROTATION_CODES = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
         self._camera_rotation = _ROTATION_CODES.get(camera_rotation)
@@ -458,6 +460,7 @@ class App:
             return
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._camera_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._camera_height)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # 最小化 buffer，避免拍攝到舊幀
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         print(f"[camera] 解析度：{actual_w}x{actual_h}（要求 {self._camera_width}x{self._camera_height}）", flush=True)
@@ -639,6 +642,8 @@ class App:
         if self._camera is None:
             return None
         try:
+            for _ in range(self._camera_capture_warmup_frames):
+                self._camera.read()  # 排空 buffer，讓 AEC/AWB 收斂至當前光源
             ret, frame = self._camera.read()
             if not ret or frame is None:
                 return None
