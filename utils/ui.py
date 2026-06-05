@@ -194,6 +194,7 @@ class App:
         camera_backend: str = "auto",
         camera_rotation: int = 0,
         color_correction_wb: tuple | None = None,
+        color_correction_wb_temp: int | None = None,
         light_gpio_pin: int = 18,
         light_led_count: int = 24,
         light_pixel_order: str = "GRB",
@@ -231,6 +232,7 @@ class App:
         _ROTATION_CODES = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
         self._camera_rotation = _ROTATION_CODES.get(camera_rotation)
         self._color_correction_wb = color_correction_wb  # (R, G, B) 增益或 None
+        self._color_correction_wb_temp = color_correction_wb_temp  # V4L2 WB 溫度或 None
 
         # --- LED ---
         self.led_pixels = None
@@ -467,16 +469,19 @@ class App:
             self._camera = None
             print(f"[camera] Warning: no USB camera at index {self._camera_index}")
             return
+        # V4L2 強制 MJPEG 必須先於解析度設定
+        if backend_id == cv2.CAP_V4L2:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._camera_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._camera_height)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # 最小化 buffer，避免拍攝到舊幀
-        # V4L2 強制 MJPEG 避免 USB-IP 錠寬帶寬 timeout
-        if backend_id == cv2.CAP_V4L2:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        # 停用自動白平衡（dshow 後端有效，v4l2 長期行為一致）
+        # 停用自動白平衡並設定硬體 WB 溫度
         if self._color_correction_wb is not None:
             cap.set(cv2.CAP_PROP_AUTO_WB, 0)
-            print(f"[camera] AWB 停用，SW 白平衡 R={self._color_correction_wb[0]:.3f} "
+            if self._color_correction_wb_temp is not None:
+                cap.set(cv2.CAP_PROP_WB_TEMPERATURE, self._color_correction_wb_temp)
+            print(f"[camera] AWB 停用，WB temp={self._color_correction_wb_temp}  "
+                  f"SW 白平衡 R={self._color_correction_wb[0]:.3f} "
                   f"G={self._color_correction_wb[1]:.3f} B={self._color_correction_wb[2]:.3f}", flush=True)
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -659,11 +664,33 @@ class App:
         if self._camera is None:
             return None
         try:
-            for _ in range(self._camera_capture_warmup_frames):
-                self._camera.read()  # 排空 buffer，讓 AEC/AWB 收斂至當前光源
-            ret, frame = self._camera.read()
-            if not ret or frame is None:
+            # 收斂等待：等亮度穩定（rolling std < 3.0），最多等 max_frames 幀
+            _WINDOW   = 8    # rolling window 大小
+            _STD_GOAL = 3.0  # 亮度 std 目標（越小越穩定）
+            _MAX      = self._camera_capture_warmup_frames  # 上限（防止無限等待）
+            buf: list[float] = []
+            frame = None
+            for i in range(_MAX):
+                ret, f = self._camera.read()
+                if not ret or f is None:
+                    continue
+                brightness = float(f.mean())
+                buf.append(brightness)
+                if len(buf) > _WINDOW:
+                    buf.pop(0)
+                frame = f
+                if len(buf) == _WINDOW:
+                    std = float(np.std(buf))
+                    if std < _STD_GOAL:
+                        print(f"[camera] AEC converged at frame {i+1}/{_MAX}  brightness={brightness:.1f}  σ={std:.2f}", flush=True)
+                        break
+            else:
+                std = float(np.std(buf)) if buf else 0.0
+                print(f"[camera] AEC max frames reached ({_MAX})  brightness={float(buf[-1] if buf else 0):.1f}  σ={std:.2f}", flush=True)
+
+            if frame is None:
                 return None
+
             # 套用軟體 RGB 增益校正
             if self._color_correction_wb is not None:
                 r, g, b = self._color_correction_wb

@@ -249,23 +249,17 @@ def draw_overlay(frame_bgr: np.ndarray, stats: dict, std_rgb: np.ndarray,
 
 
 def save_to_config(wb: int, sw_gain: tuple) -> None:
-    """將白平衡增益寫入 config.yaml 的 color_correction 區塊。"""
-    import yaml
+    """將白平衡設定寫入 config.yaml 的 color_correction 區塊。"""
     r, g, b = sw_gain
     try:
-        cfg = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
-        cfg.setdefault("color_correction", {})
-        cfg["color_correction"]["enabled"] = True
-        cfg["color_correction"]["white_balance"] = [round(r, 4), round(g, 4), round(b, 4)]
-        # 保留原始格式（用 ruamel 或直接覆寫簡單 yaml）
         lines = CONFIG_FILE.read_text(encoding="utf-8").splitlines() if CONFIG_FILE.exists() else []
-        # 找到並替換 color_correction 區塊，或在末尾新增
         new_lines, in_block, replaced = [], False, False
         for line in lines:
             if line.startswith("color_correction:"):
                 in_block = True
                 new_lines.append("color_correction:")
                 new_lines.append(f"  enabled: true")
+                new_lines.append(f"  wb_temperature: {wb}")
                 new_lines.append(f"  white_balance: [{r:.4f}, {g:.4f}, {b:.4f}]")
                 replaced = True
                 continue
@@ -273,12 +267,12 @@ def save_to_config(wb: int, sw_gain: tuple) -> None:
                 if line and not line.startswith(" ") and not line.startswith("#"):
                     in_block = False
                     new_lines.append(line)
-                # else: skip old block lines
             else:
                 new_lines.append(line)
         if not replaced:
             new_lines.append("color_correction:")
             new_lines.append(f"  enabled: true")
+            new_lines.append(f"  wb_temperature: {wb}")
             new_lines.append(f"  white_balance: [{r:.4f}, {g:.4f}, {b:.4f}]")
         CONFIG_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
         print(f"已存入 config.yaml  WB={wb} R={r:.4f} G={g:.4f} B={b:.4f}")

@@ -75,6 +75,7 @@ def main():
     _cc_cfg = _cfg.get("color_correction", {})
     cc_enabled      = _cc_cfg.get("enabled", False)
     cc_wb           = tuple(_cc_cfg.get("white_balance", [1.0, 1.0, 1.0])) if cc_enabled else None
+    cc_wb_temp      = _cc_cfg.get("wb_temperature", None) if cc_enabled else None
 
     light_gpio       = _light_cfg.get("gpio_pin", 18)
     light_count      = _light_cfg.get("led_count", 24)
@@ -117,6 +118,7 @@ def main():
         camera_backend=camera_backend,
         camera_rotation=args.rotation,
         color_correction_wb=cc_wb,
+        color_correction_wb_temp=cc_wb_temp,
         light_gpio_pin=light_gpio,
         light_led_count=light_count,
         light_pixel_order=light_order,
