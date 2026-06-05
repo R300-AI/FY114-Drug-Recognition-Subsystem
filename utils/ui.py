@@ -571,7 +571,8 @@ class App:
                 with self._latest_frame_lock:
                     self._latest_frame = frame
 
-    def _start_drawer_monitoring(self):        self._drawer_running = True
+    def _start_drawer_monitoring(self):
+        self._drawer_running = True
         self._drawer_thread = threading.Thread(
             target=self._drawer_capture_loop, daemon=True)
         self._drawer_thread.start()
