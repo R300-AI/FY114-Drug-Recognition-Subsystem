@@ -30,4 +30,4 @@ light:
 # ── 色彩校正（影像後處理） ────────────────────────────────────
 color_correction:
   enabled: true
-  white_balance: [1.24, 0.78, 0.62]   # R / G / B 增益（由 camera.py 校正，2026-06-05）
+  white_balance: [1.3600, 1.2200, 0.8800]

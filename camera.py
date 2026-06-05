@@ -1,33 +1,28 @@
 """
-camera.py — White balance calibration capture tool for Logitech C270.
+camera.py — White balance calibration capture tool for Logitech C270 (V4L2/Linux).
 
-Disables AWB and auto-exposure, provides a live diagnostic dashboard to find
-the WB temperature + exposure combination that yields a neutral gray background.
+Disables AWB and sets manual WB temperature. Provides a live diagnostic dashboard
+to find the SW RGB gain combination that yields a neutral gray background.
 
 Keys:
     SPACE   Capture and save frame to captures/
-    S       Save current settings to camera_settings.json (auto-loaded next run)
     Q       Quit
 """
 from __future__ import annotations
 
 import json
 import sys
-import threading
-import tkinter as tk
 from collections import deque
 from datetime import datetime
 from pathlib import Path
 
 import cv2
 import numpy as np
-
-
 # ── Configuration ─────────────────────────────────────────────────────────────
 DEVICE_ID     = 0
-BACKEND       = cv2.CAP_DSHOW     # DirectShow (Windows). Try CAP_MSMF if this fails.
-FRAME_W       = 1280
-FRAME_H       = 720
+BACKEND       = cv2.CAP_V4L2
+FRAME_W       = 640
+FRAME_H       = 480
 TARGET_GRAY   = 128.0
 STABILITY_N   = 30                # frames in rolling-std window
 
@@ -36,16 +31,12 @@ SETTINGS_FILE = Path("camera_settings.json")
 CONFIG_FILE   = Path("config.yaml")
 
 
-WB_RANGE      = (2800, 6500)      # Kelvin
-EXP_RANGE     = (-13, -1)         # DirectShow log2 scale
-GAIN_RANGE    = (0, 255)
-BRIGHT_RANGE  = (0, 255)
-CONT_RANGE    = (0, 255)
+# V4L2 白平衡溫度範圍（v4l2-ctl 查詢 C270：min=0 max=10000 step=10）
+WB_RANGE      = (0, 10000)
 
 WIN_PREV      = "Preview — WB Calibration"
 WIN_CTRL      = "Controls"
-TB_WB         = "WB Temp (2800-6500 K)"
-TB_EXP        = "Exposure  (-13 to -1)"
+TB_WB         = "WB Temp (0-10000)"
 TB_GAIN       = "Gain"
 TB_BRIG       = "Brightness"
 TB_CONT       = "Contrast"
@@ -62,6 +53,7 @@ def open_camera() -> cv2.VideoCapture:
     cap = cv2.VideoCapture(DEVICE_ID, BACKEND)
     if not cap.isOpened():
         sys.exit(f"Camera {DEVICE_ID} not found. Check DEVICE_ID or BACKEND.")
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  FRAME_W)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
     cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
@@ -69,16 +61,14 @@ def open_camera() -> cv2.VideoCapture:
 
 
 def apply_settings(cap: cv2.VideoCapture,
-                   wb: int, exp: int, gain: int, bright: int, cont: int) -> dict:
-    return {
-        "awb_off":    cap.set(cv2.CAP_PROP_AUTO_WB,        0),
-        "wb_temp":    cap.set(cv2.CAP_PROP_WB_TEMPERATURE,  wb),
-        "auto_exp":   cap.set(cv2.CAP_PROP_AUTO_EXPOSURE,   0.25),
-        "exposure":   cap.set(cv2.CAP_PROP_EXPOSURE,        exp),
-        "gain":       cap.set(cv2.CAP_PROP_GAIN,            gain),
-        "brightness": cap.set(cv2.CAP_PROP_BRIGHTNESS,      bright),
-        "contrast":   cap.set(cv2.CAP_PROP_CONTRAST,        cont),
-    }
+                   wb: int, gain: int, bright: int, cont: int) -> bool:
+    """Apply V4L2 camera settings. Returns True if AWB was successfully disabled."""
+    awb_off = cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+    cap.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
+    cap.set(cv2.CAP_PROP_GAIN,           gain)
+    cap.set(cv2.CAP_PROP_BRIGHTNESS,     bright)
+    cap.set(cv2.CAP_PROP_CONTRAST,       cont)
+    return bool(awb_off)
 
 
 # ── Controls window ────────────────────────────────────────────────────────────
@@ -88,43 +78,37 @@ def _load_defaults() -> dict:
             return json.loads(SETTINGS_FILE.read_text())
     except Exception:
         pass
-    # trackbar positions (not raw values)
-    return {"wb": 50, "exp": 7, "gain": 0, "bright": 128, "cont": 128,
+    # trackbar positions (not raw values); wb=400 → 4000K (C270 default)
+    return {"wb": 400, "gain": 0, "bright": 128, "cont": 128,
             "sw_r": 50, "sw_g": 50, "sw_b": 50}
 
 
-def _tb_to_gain(pos: int) -> float:
-    """Convert trackbar position 0-100 to gain 0.0-2.0 (50 → 1.0x)."""
+def _tb_to_sw(pos: int) -> float:
+    """Convert trackbar position 0-100 to SW gain 0.0-2.0 (50 → 1.0x)."""
     lo, hi = SW_GAIN_RANGE
     return lo + pos * (hi - lo) / 100
-
-
-def _gain_to_tb(gain: float) -> int:
-    lo, hi = SW_GAIN_RANGE
-    return int(round((gain - lo) / (hi - lo) * 100))
 
 
 def init_controls() -> None:
     d = _load_defaults()
     cv2.namedWindow(WIN_CTRL, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WIN_CTRL, 560, 330)
+    cv2.resizeWindow(WIN_CTRL, 560, 300)
     noop = lambda _: None
-    cv2.createTrackbar(TB_WB,   WIN_CTRL, d["wb"],   100, noop)
-    cv2.createTrackbar(TB_EXP,  WIN_CTRL, d["exp"],   12, noop)
-    cv2.createTrackbar(TB_GAIN, WIN_CTRL, d["gain"], 255, noop)
+    cv2.createTrackbar(TB_WB,   WIN_CTRL, d["wb"],    1000, noop)  # 0-1000 → WB 0-10000
+    cv2.createTrackbar(TB_GAIN, WIN_CTRL, d["gain"],   255, noop)
     cv2.createTrackbar(TB_BRIG, WIN_CTRL, d["bright"], 255, noop)
-    cv2.createTrackbar(TB_CONT, WIN_CTRL, d["cont"],  255, noop)
+    cv2.createTrackbar(TB_CONT, WIN_CTRL, d["cont"],   255, noop)
     cv2.createTrackbar(TB_R,    WIN_CTRL, d.get("sw_r", 50), 100, noop)
     cv2.createTrackbar(TB_G,    WIN_CTRL, d.get("sw_g", 50), 100, noop)
     cv2.createTrackbar(TB_B,    WIN_CTRL, d.get("sw_b", 50), 100, noop)
 
 
 def read_controls() -> tuple:
-    g   = lambda name: cv2.getTrackbarPos(name, WIN_CTRL)
-    wb  = WB_RANGE[0]  + g(TB_WB)  * (WB_RANGE[1]  - WB_RANGE[0])  // 100
-    exp = EXP_RANGE[0] + g(TB_EXP)
-    sw_gain = (_tb_to_gain(g(TB_R)), _tb_to_gain(g(TB_G)), _tb_to_gain(g(TB_B)))
-    return wb, exp, g(TB_GAIN), g(TB_BRIG), g(TB_CONT), sw_gain
+    """Returns (wb, gain, bright, cont, sw_gain)."""
+    g  = lambda name: cv2.getTrackbarPos(name, WIN_CTRL)
+    wb = g(TB_WB) * 10   # slider 0-1000 → V4L2 0-10000 step 10
+    sw_gain = (_tb_to_sw(g(TB_R)), _tb_to_sw(g(TB_G)), _tb_to_sw(g(TB_B)))
+    return wb, g(TB_GAIN), g(TB_BRIG), g(TB_CONT), sw_gain
 
 
 def apply_sw_gain(frame_bgr: np.ndarray, sw_gain: tuple) -> np.ndarray:
@@ -140,21 +124,20 @@ def apply_sw_gain(frame_bgr: np.ndarray, sw_gain: tuple) -> np.ndarray:
     return out
 
 
-def save_settings(wb: int, exp: int, gain: int, bright: int, cont: int,
+def save_settings(wb: int, gain: int, bright: int, cont: int,
                   sw_gain: tuple) -> None:
     g = lambda name: cv2.getTrackbarPos(name, WIN_CTRL)
     r, gg, b = sw_gain
     payload = {
-        "wb": g(TB_WB), "exp": g(TB_EXP),
+        "wb": g(TB_WB),
         "gain": gain, "bright": bright, "cont": cont,
         "sw_r": g(TB_R), "sw_g": g(TB_G), "sw_b": g(TB_B),
-        "_wb_kelvin": wb, "_exposure_log2": exp,
+        "_wb_v4l2": wb,
         "_sw_gain_rgb": [round(r, 4), round(gg, 4), round(b, 4)],
     }
     SETTINGS_FILE.write_text(json.dumps(payload, indent=2))
     print(f"Settings saved → {SETTINGS_FILE}  "
-          f"(WB={wb}K, Exp={exp}, SW R={r:.3f} G={gg:.3f} B={b:.3f})")
-    print(f"  → config.yaml white_balance: [{r:.4f}, {gg:.4f}, {b:.4f}]")
+          f"(WB={wb}, SW R={r:.3f} G={gg:.3f} B={b:.3f})")
 
 
 # ── Statistics ────────────────────────────────────────────────────────────────
@@ -193,7 +176,7 @@ def _bar(canvas, x0, y, width, value, max_val, color, *, centered=False):
 
 
 def draw_overlay(frame_bgr: np.ndarray, stats: dict, std_rgb: np.ndarray,
-                 wb: int, exp: int, awb_disabled: bool) -> np.ndarray:
+                 wb: int, awb_disabled: bool) -> np.ndarray:
     out = frame_bgr.copy()
     h, w = out.shape[:2]
     F    = cv2.FONT_HERSHEY_SIMPLEX
@@ -241,7 +224,7 @@ def draw_overlay(frame_bgr: np.ndarray, stats: dict, std_rgb: np.ndarray,
 
     # ── Right panel: settings + hint ─────────────────────────────────────
     rx = 400
-    cv2.putText(out, f"WB {wb} K     Exp {exp}",
+    cv2.putText(out, f"WB {wb}  (V4L2 0-10000)",
                 (rx, y0 + 6), F, 0.50, (210, 210, 210), 1)
     cv2.putText(out, f"Brightness {stats['brightness']:5.1f}",
                 (rx, y0 + 28), F, 0.43, DIM, 1)
@@ -265,8 +248,7 @@ def draw_overlay(frame_bgr: np.ndarray, stats: dict, std_rgb: np.ndarray,
     return out
 
 
-def save_to_config(wb: int, exp: int, sw_gain: tuple,
-                   status_var=None) -> None:
+def save_to_config(wb: int, sw_gain: tuple) -> None:
     """將白平衡增益寫入 config.yaml 的 color_correction 區塊。"""
     import yaml
     r, g, b = sw_gain
@@ -299,72 +281,12 @@ def save_to_config(wb: int, exp: int, sw_gain: tuple,
             new_lines.append(f"  enabled: true")
             new_lines.append(f"  white_balance: [{r:.4f}, {g:.4f}, {b:.4f}]")
         CONFIG_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-        msg = f"已存入 config.yaml  R={r:.4f} G={g:.4f} B={b:.4f}"
-        print(msg)
-        if status_var:
-            status_var.set(msg)
+        print(f"已存入 config.yaml  WB={wb} R={r:.4f} G={g:.4f} B={b:.4f}")
     except Exception as e:
-        if status_var:
-            status_var.set(f"錯誤：{e}")
         print(f"[config] save failed: {e}")
 
 
-# ── Button panel (tkinter, 獨立執行緒) ────────────────────────────────────────
-class ButtonPanel:
-    def __init__(self, get_ctrl_fn):
-        self._get_ctrl = get_ctrl_fn
-        self._root = None
-        self._status_var = None
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
 
-    def _run(self):
-        self._root = tk.Tk()
-        self._root.title("儲存設定")
-        self._root.geometry("320x140")
-        self._root.resizable(False, False)
-        self._root.attributes("-topmost", True)
-
-        self._status_var = tk.StringVar(value="調整滑桿後按下按鈕儲存")
-
-        tk.Button(
-            self._root, text="💾  存到 camera_settings.json",
-            font=("Microsoft JhengHei", 11), bg="#dce8f7",
-            command=self._on_save_json, pady=6,
-        ).pack(fill=tk.X, padx=12, pady=(14, 4))
-
-        tk.Button(
-            self._root, text="✅  存到 config.yaml（套用至 FY114）",
-            font=("Microsoft JhengHei", 11), bg="#d8f1d8",
-            command=self._on_save_config, pady=6,
-        ).pack(fill=tk.X, padx=12, pady=4)
-
-        tk.Label(
-            self._root, textvariable=self._status_var,
-            font=("Microsoft JhengHei", 9), fg="#555", wraplength=290,
-        ).pack(pady=(4, 0))
-
-        self._root.mainloop()
-
-    def _on_save_json(self):
-        ctrl = self._get_ctrl()
-        if ctrl is None:
-            return
-        save_settings(ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4], ctrl[5])
-        self._status_var.set(f"已存 camera_settings.json")
-
-    def _on_save_config(self):
-        ctrl = self._get_ctrl()
-        if ctrl is None:
-            return
-        save_to_config(ctrl[0], ctrl[1], ctrl[5], self._status_var)
-
-    def destroy(self):
-        if self._root:
-            try:
-                self._root.quit()
-            except Exception:
-                pass
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -383,25 +305,20 @@ def main() -> None:
     print("Camera opened. Adjust sliders in the Controls window.")
     print("Place the gray card in view, then tune WB until Neutral dev < 6.")
 
-    _last_ctrl: list = [None]
-    def _get_ctrl(): return _last_ctrl[0]
-    panel = ButtonPanel(_get_ctrl)
-
     while True:
+        # ctrl = (wb, gain, bright, cont, sw_gain)
         ctrl = read_controls()
-        _last_ctrl[0] = ctrl
         if ctrl != prev_ctrl:
-            result       = apply_settings(cap, ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4])
-            awb_disabled = result["awb_off"] and result["wb_temp"]
-            save_to_config(ctrl[0], ctrl[1], ctrl[5])   # 滑桿一動即自動更新 config.yaml
-            prev_ctrl    = ctrl
+            awb_disabled = apply_settings(cap, ctrl[0], ctrl[1], ctrl[2], ctrl[3])
+            save_to_config(ctrl[0], ctrl[4])
+            save_settings(ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4])
+            prev_ctrl = ctrl
 
         ret, frame = cap.read()
         if not ret:
             continue
 
-        # 套用軟體 RGB 增益後再計算統計與顯示
-        sw_gain = ctrl[5]
+        sw_gain = ctrl[4]
         frame_corrected = apply_sw_gain(frame, sw_gain)
 
         rgb   = cv2.cvtColor(frame_corrected, cv2.COLOR_BGR2RGB)
@@ -410,7 +327,7 @@ def main() -> None:
         std_rgb = np.std(np.array(buf), axis=0) if len(buf) > 3 else np.zeros(3)
 
         r_g, g_g, b_g = sw_gain
-        display = draw_overlay(frame_corrected, stats, std_rgb, ctrl[0], ctrl[1], awb_disabled)
+        display = draw_overlay(frame_corrected, stats, std_rgb, ctrl[0], awb_disabled)
         cv2.putText(display, f"SW R={r_g:.2f} G={g_g:.2f} B={b_g:.2f}",
                     (400, display.shape[0] - _PANEL_H + 80),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 255), 1)
@@ -426,10 +343,7 @@ def main() -> None:
             print(f"Saved {path}  "
                   f"R={stats['rgb'][0]:.1f} G={stats['rgb'][1]:.1f} B={stats['rgb'][2]:.1f}  "
                   f"dev={stats['neutral_dev']:.1f}  \u03c3={float(std_rgb.mean()):.2f}")
-        elif key == ord("s"):
-            save_settings(ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4], ctrl[5])
 
-    panel.destroy()
     cap.release()
     cv2.destroyAllWindows()
 
