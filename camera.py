@@ -18,6 +18,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import yaml
 # ── Configuration ─────────────────────────────────────────────────────────────
 DEVICE_ID     = 0
 BACKEND       = cv2.CAP_V4L2
@@ -46,6 +47,29 @@ TB_B          = "SW B (0~2x, 50=1x)"
 SW_GAIN_RANGE = (0.0, 2.0)   # 0 → 0.0x, 50 → 1.0x, 100 → 2.0x
 
 _PANEL_H      = 150
+
+
+# ── LED ────────────────────────────────────────────────────────────────────────
+def init_led():
+    """讀取 config.yaml 的 light 設定，開啟 LED。如果無 LED 硬體或設定缺失則跳過。"""
+    try:
+        cfg = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+        light = cfg.get("light", {})
+        import board, neopixel
+        _ORDER_MAP = {"RGB": neopixel.RGB, "GRB": neopixel.GRB,
+                      "RGBW": neopixel.RGBW, "GRBW": neopixel.GRBW}
+        pin        = getattr(board, f"D{light.get('gpio_pin', 18)}")
+        count      = light.get("led_count", 24)
+        brightness = light.get("brightness", 1.0)
+        order      = _ORDER_MAP.get(light.get("pixel_order", "GRB").upper(), neopixel.GRB)
+        color_on   = tuple(light.get("color_on", [255, 255, 255]))
+        pixels = neopixel.NeoPixel(pin, count, brightness=brightness, pixel_order=order)
+        pixels.fill(color_on)
+        print(f"[light] LED ON  gpio=D{light.get('gpio_pin', 18)}  count={count}")
+        return pixels
+    except Exception as e:
+        print(f"[light] LED 無法啟動（{e}），校正在無燈模式下進行。")
+        return None
 
 
 # ── Camera ────────────────────────────────────────────────────────────────────
@@ -286,6 +310,7 @@ def save_to_config(wb: int, sw_gain: tuple) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
     OUTPUT_DIR.mkdir(exist_ok=True)
+    led = init_led()          # 開啟 LED，確保和 run.py 相同光源
     cap = open_camera()
     init_controls()
 
@@ -340,6 +365,11 @@ def main() -> None:
 
     cap.release()
     cv2.destroyAllWindows()
+    if led:
+        try:
+            led.fill((0, 0, 0))
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

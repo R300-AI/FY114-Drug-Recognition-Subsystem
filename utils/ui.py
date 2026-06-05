@@ -234,6 +234,12 @@ class App:
         self._color_correction_wb = color_correction_wb  # (R, G, B) 增益或 None
         self._color_correction_wb_temp = color_correction_wb_temp  # V4L2 WB 溫度或 None
 
+        # --- 相機背景串流 ---
+        self._latest_frame: np.ndarray | None = None
+        self._latest_frame_lock = threading.Lock()
+        self._camera_running = False
+        self._camera_thread: threading.Thread | None = None
+
         # --- LED ---
         self.led_pixels = None
         self._light_gpio_pin    = light_gpio_pin
@@ -493,6 +499,11 @@ class App:
                 print(f"[camera] 第一幀取得，暖機中...", flush=True)
         print("[camera] USB Camera ready", flush=True)
         self._camera = cap
+        # 啟動背景串流執行緒，持續讀幀使 AEC 一直收斂
+        self._camera_running = True
+        self._camera_thread = threading.Thread(target=self._camera_read_loop, daemon=True)
+        self._camera_thread.start()
+        print("[camera] Background stream started", flush=True)
 
     # --------------------------------------------------------
     # 抽屜感測器
@@ -549,8 +560,18 @@ class App:
             print(f"[drawer] Init failed: {e} — auto-trigger disabled")
             self._drawer_cap = None
 
-    def _start_drawer_monitoring(self):
-        self._drawer_running = True
+    def _camera_read_loop(self):
+        """Background thread: 持續讀幀，與 camera.py 主迴圈相同。
+        AEC 一直在運作，_capture_single_frame 取用時已是收斂狀態。"""
+        while self._camera_running:
+            if self._camera is None:
+                break
+            ret, frame = self._camera.read()
+            if ret and frame is not None:
+                with self._latest_frame_lock:
+                    self._latest_frame = frame
+
+    def _start_drawer_monitoring(self):        self._drawer_running = True
         self._drawer_thread = threading.Thread(
             target=self._drawer_capture_loop, daemon=True)
         self._drawer_thread.start()
@@ -664,33 +685,14 @@ class App:
         if self._camera is None:
             return None
         try:
-            # 收斂等待：等亮度穩定（rolling std < 3.0），最多等 max_frames 幀
-            _WINDOW   = 8    # rolling window 大小
-            _STD_GOAL = 3.0  # 亮度 std 目標（越小越穩定）
-            _MAX      = self._camera_capture_warmup_frames  # 上限（防止無限等待）
-            buf: list[float] = []
-            frame = None
-            for i in range(_MAX):
-                ret, f = self._camera.read()
-                if not ret or f is None:
-                    continue
-                brightness = float(f.mean())
-                buf.append(brightness)
-                if len(buf) > _WINDOW:
-                    buf.pop(0)
-                frame = f
-                if len(buf) == _WINDOW:
-                    std = float(np.std(buf))
-                    if std < _STD_GOAL:
-                        print(f"[camera] AEC converged at frame {i+1}/{_MAX}  brightness={brightness:.1f}  σ={std:.2f}", flush=True)
-                        break
-            else:
-                std = float(np.std(buf)) if buf else 0.0
-                print(f"[camera] AEC max frames reached ({_MAX})  brightness={float(buf[-1] if buf else 0):.1f}  σ={std:.2f}", flush=True)
-
+            # 從背景串流執行緒取最新幀（AEC 已持續收斂，無需再等待）
+            with self._latest_frame_lock:
+                frame = self._latest_frame.copy() if self._latest_frame is not None else None
             if frame is None:
+                print("[camera] No frame available yet from background stream", flush=True)
                 return None
-
+            brightness = float(frame.mean())
+            print(f"[camera] Captured frame  brightness={brightness:.1f}", flush=True)
             # 套用軟體 RGB 增益校正
             if self._color_correction_wb is not None:
                 r, g, b = self._color_correction_wb
@@ -2105,6 +2107,9 @@ class App:
                 self.led_pixels.fill(self._light_color_off)
             except Exception:
                 pass
+        self._camera_running = False
+        if self._camera_thread:
+            self._camera_thread.join(timeout=2.0)
         if self._camera:
             try:
                 self._camera.release()
