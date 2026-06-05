@@ -4,9 +4,9 @@
 
 # ── AI Search Platform 連線 ──────────────────────────────────
 api:
-  segment_url: "http://localhost:8001"    # 影像切割服務
-  encoder_url: "http://localhost:8002"    # 特徵比對服務
-  timeout: 30                             # HTTP 請求逾時（秒）
+  segment_url: "http://192.168.50.1:8001"    # 影像切割服務
+  encoder_url: "http://192.168.50.1:8002"    # 特徵比對服務
+  timeout: 30                                 # HTTP 請求逾時（秒）
 
 # ── USB 相機（Logitech C270） ────────────────────────────────
 camera:
