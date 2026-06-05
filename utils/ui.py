@@ -193,6 +193,7 @@ class App:
         camera_capture_warmup_frames: int = 5,
         camera_backend: str = "auto",
         camera_rotation: int = 0,
+        color_correction_wb: tuple | None = None,
         light_gpio_pin: int = 18,
         light_led_count: int = 24,
         light_pixel_order: str = "GRB",
@@ -229,6 +230,7 @@ class App:
         self._camera_backend = camera_backend
         _ROTATION_CODES = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
         self._camera_rotation = _ROTATION_CODES.get(camera_rotation)
+        self._color_correction_wb = color_correction_wb  # (R, G, B) 增益或 None
 
         # --- LED ---
         self.led_pixels = None
@@ -468,6 +470,11 @@ class App:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._camera_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._camera_height)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # 最小化 buffer，避免拍攝到舊幀
+        # 停用自動白平衡（dshow 後端有效，v4l2 長期行為一致）
+        if self._color_correction_wb is not None:
+            cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+            print(f"[camera] AWB 停用，SW 白平衡 R={self._color_correction_wb[0]:.3f} "
+                  f"G={self._color_correction_wb[1]:.3f} B={self._color_correction_wb[2]:.3f}", flush=True)
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         print(f"[camera] 解析度：{actual_w}x{actual_h}（要求 {self._camera_width}x{self._camera_height}）", flush=True)
@@ -654,6 +661,15 @@ class App:
             ret, frame = self._camera.read()
             if not ret or frame is None:
                 return None
+            # 套用軟體 RGB 增益校正
+            if self._color_correction_wb is not None:
+                r, g, b = self._color_correction_wb
+                lut_r = np.clip(np.arange(256, dtype=np.float32) * r, 0, 255).astype(np.uint8)
+                lut_g = np.clip(np.arange(256, dtype=np.float32) * g, 0, 255).astype(np.uint8)
+                lut_b = np.clip(np.arange(256, dtype=np.float32) * b, 0, 255).astype(np.uint8)
+                frame[:, :, 2] = lut_r[frame[:, :, 2]]
+                frame[:, :, 1] = lut_g[frame[:, :, 1]]
+                frame[:, :, 0] = lut_b[frame[:, :, 0]]
             if self._camera_rotation is not None:
                 frame = cv2.rotate(frame, self._camera_rotation)
             return frame

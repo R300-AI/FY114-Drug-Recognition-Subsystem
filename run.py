@@ -72,6 +72,10 @@ def main():
     camera_capture_warmup = _camera_cfg.get("capture_warmup_frames", 5)
     camera_backend = _camera_cfg.get("backend", "auto")
 
+    _cc_cfg = _cfg.get("color_correction", {})
+    cc_enabled      = _cc_cfg.get("enabled", False)
+    cc_wb           = tuple(_cc_cfg.get("white_balance", [1.0, 1.0, 1.0])) if cc_enabled else None
+
     light_gpio       = _light_cfg.get("gpio_pin", 18)
     light_count      = _light_cfg.get("led_count", 24)
     light_order      = _light_cfg.get("pixel_order", "GRB")
@@ -112,6 +116,7 @@ def main():
         camera_capture_warmup_frames=camera_capture_warmup,
         camera_backend=camera_backend,
         camera_rotation=args.rotation,
+        color_correction_wb=cc_wb,
         light_gpio_pin=light_gpio,
         light_led_count=light_count,
         light_pixel_order=light_order,

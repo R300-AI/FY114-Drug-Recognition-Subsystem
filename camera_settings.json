@@ -1,0 +1,17 @@
+{
+  "wb": 68,
+  "exp": 8,
+  "gain": 6,
+  "bright": 137,
+  "cont": 41,
+  "sw_r": 62,
+  "sw_g": 39,
+  "sw_b": 31,
+  "_wb_kelvin": 5316,
+  "_exposure_log2": -5,
+  "_sw_gain_rgb": [
+    1.24,
+    0.78,
+    0.62
+  ]
+}
