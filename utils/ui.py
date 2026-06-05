@@ -451,10 +451,17 @@ class App:
         backend_id = _BACKENDS.get(self._camera_backend.lower())
         backend_label = self._camera_backend
         print(f"[camera] 開啟 USB 相機 index={self._camera_index}  backend={backend_label}...", flush=True)
-        cap = (cv2.VideoCapture(self._camera_index, backend_id) if backend_id is not None
-               else cv2.VideoCapture(self._camera_index))
-        if not cap.isOpened():
-            cap.release()
+        cap = None
+        for attempt in range(1, 6):   # 最多重試 5 次，每次間隔 2 秒（開機時 USB 枚舉可能較慢）
+            _cap = (cv2.VideoCapture(self._camera_index, backend_id) if backend_id is not None
+                    else cv2.VideoCapture(self._camera_index))
+            if _cap.isOpened():
+                cap = _cap
+                break
+            _cap.release()
+            print(f"[camera] 嘗試 {attempt}/5 失敗，2 秒後重試...", flush=True)
+            time.sleep(2)
+        if cap is None:
             self._camera = None
             print(f"[camera] Warning: no USB camera at index {self._camera_index}")
             return

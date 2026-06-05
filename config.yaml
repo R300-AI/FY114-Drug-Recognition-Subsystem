@@ -15,7 +15,7 @@ camera:
   height: 720           # 擷取解析度（高）
   warmup_frames: 20         # 啟動時捨棄前 N 幀以使 AEC/AWB 初始收斂
   capture_warmup_frames: 5  # 每次實際拍攝前，額外排空 N 幀 buffer（防止抽屜閉合後 AEC 延遲導致暗紅色）
-  backend: dshow        # OpenCV 後端：auto / dshow（Windows）/ v4l2（Linux/Pi）
+  backend: v4l2         # OpenCV 後端：auto / dshow（Windows）/ v4l2（Linux/Pi）
   rotation: 90          # 順時針旋轉角度：0 / 90 / 180 / 270
 
 # ── LED 環形燈（WS2812 NeoPixel） ────────────────────────────
