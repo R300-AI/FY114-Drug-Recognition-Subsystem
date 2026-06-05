@@ -11,8 +11,8 @@ api:
 # ── USB 相機（Logitech C270） ────────────────────────────────
 camera:
   device_index: 0       # /dev/video0 → 0，若有多顆 USB 相機請依序遞增
-  width: 1280           # 擷取解析度（寬），C270 最高支援 1280x720
-  height: 720           # 擷取解析度（高）
+  width: 640            # 擷取解析度（寬），MJPEG 640x480 可避免 USB-IP 頻寬 timeout
+  height: 480           # 擷取解析度（高）
   warmup_frames: 20         # 啟動時捨棄前 N 幀以使 AEC/AWB 初始收斂
   capture_warmup_frames: 5  # 每次實際拍攝前，額外排空 N 幀 buffer（防止抽屜閉合後 AEC 延遲導致暗紅色）
   backend: v4l2         # OpenCV 後端：auto / dshow（Windows）/ v4l2（Linux/Pi）

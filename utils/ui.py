@@ -470,6 +470,9 @@ class App:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._camera_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._camera_height)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # 最小化 buffer，避免拍攝到舊幀
+        # V4L2 強制 MJPEG 避免 USB-IP 錠寬帶寬 timeout
+        if backend_id == cv2.CAP_V4L2:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         # 停用自動白平衡（dshow 後端有效，v4l2 長期行為一致）
         if self._color_correction_wb is not None:
             cap.set(cv2.CAP_PROP_AUTO_WB, 0)
